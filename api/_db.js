@@ -127,6 +127,12 @@ export async function getState(forceRefresh = false) {
 
 export async function updateState(partial = {}) {
   const current = await getState();
+
+  // Reject out-of-order stale updates if an older network packet arrives
+  if (partial.lastUpdated && current.lastUpdated && partial.lastUpdated < current.lastUpdated) {
+    return current;
+  }
+
   const next = {
     ...current,
     ...partial,
@@ -142,7 +148,7 @@ export async function updateState(partial = {}) {
       ...current.bosses,
       ...(partial.bosses || {}),
     },
-    lastUpdated: Date.now(),
+    lastUpdated: Math.max(Date.now(), partial.lastUpdated || 0),
   };
 
   globalThis.__DEATH_COUNTER_STATE__ = next;

@@ -28,6 +28,7 @@ export function useDeathCounter() {
 
   const animTimeoutRef = useRef(null);
   const bossAnimTimeoutRef = useRef(null);
+  const lastLocalActionTimeRef = useRef(0);
 
   // Keep refs for current state to allow fresh closures in event handlers
   const stateRef = useRef({
@@ -201,6 +202,19 @@ export function useDeathCounter() {
         case 'stateUpdate':
         case 'pollSync': {
           const p = msg.payload;
+          const timeSinceLocalAction = Date.now() - lastLocalActionTimeRef.current;
+
+          // If the user recently performed a local action (within 2 seconds),
+          // reject any background poll carrying older/stale counts to prevent accidental decrementing/rubber-banding
+          if (timeSinceLocalAction < 2000) {
+            if (p.deaths !== undefined && p.deaths < stateRef.current.deaths) {
+              return;
+            }
+            if (p.bossKills !== undefined && p.bossKills < stateRef.current.bossKills) {
+              return;
+            }
+          }
+
           if (p.deaths !== undefined && p.deaths !== stateRef.current.deaths) {
             const isIncrease = p.deaths > stateRef.current.deaths;
             setDeaths(p.deaths);
@@ -264,6 +278,7 @@ export function useDeathCounter() {
 
   // ─── Actions ───
   const addDeath = useCallback(() => {
+    lastLocalActionTimeRef.current = Date.now();
     const cur = stateRef.current;
     const nextDeaths = cur.deaths + 1;
     const nextSession = cur.sessionDeaths + 1;
@@ -292,6 +307,7 @@ export function useDeathCounter() {
   }, [triggerDeathAnimation]);
 
   const undoDeath = useCallback(() => {
+    lastLocalActionTimeRef.current = Date.now();
     const cur = stateRef.current;
     if (cur.deaths <= 0) return;
     const nextDeaths = cur.deaths - 1;
@@ -316,6 +332,7 @@ export function useDeathCounter() {
   }, []);
 
   const resetDeaths = useCallback(() => {
+    lastLocalActionTimeRef.current = Date.now();
     const cur = stateRef.current;
     setDeaths(0);
     setSessionDeaths(0);
@@ -335,6 +352,7 @@ export function useDeathCounter() {
   }, []);
 
   const resetSession = useCallback(() => {
+    lastLocalActionTimeRef.current = Date.now();
     const cur = stateRef.current;
     setDeaths(0);
     setSessionDeaths(0);
@@ -436,6 +454,7 @@ export function useDeathCounter() {
 
   // ─── Boss Slain / Kill Counter Actions ───
   const addBossKill = useCallback(() => {
+    lastLocalActionTimeRef.current = Date.now();
     const cur = stateRef.current;
     const nextKills = (cur.bossKills || 0) + 1;
     setBossKills(nextKills);
@@ -452,6 +471,7 @@ export function useDeathCounter() {
   }, [triggerBossSlainAnimation]);
 
   const undoBossKill = useCallback(() => {
+    lastLocalActionTimeRef.current = Date.now();
     const cur = stateRef.current;
     if (!cur.bossKills || cur.bossKills <= 0) return;
     const nextKills = cur.bossKills - 1;
@@ -467,6 +487,7 @@ export function useDeathCounter() {
   }, []);
 
   const resetBossKills = useCallback(() => {
+    lastLocalActionTimeRef.current = Date.now();
     const cur = stateRef.current;
     setBossKills(0);
     saveToStorage('bossKills', 0);
@@ -480,6 +501,7 @@ export function useDeathCounter() {
   }, []);
 
   const setDeathCount = useCallback((customValue) => {
+    lastLocalActionTimeRef.current = Date.now();
     const nextDeaths = Math.max(0, parseInt(customValue, 10) || 0);
     const cur = stateRef.current;
     const diff = nextDeaths - cur.deaths;

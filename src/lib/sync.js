@@ -170,7 +170,7 @@ export function onSyncMessage(callback) {
   window.addEventListener('storage', storageHandler);
   cleanups.push(() => window.removeEventListener('storage', storageHandler));
 
-  // ─── 4. Periodic polling safety net (every 2s) ───
+  // ─── 4. Periodic polling safety net (every 800ms for responsive OBS overlay sync) ───
   const pollInterval = setInterval(async () => {
     const serverState = await fetchServerState();
     if (serverState) {
@@ -181,7 +181,7 @@ export function onSyncMessage(callback) {
         timestamp: Date.now(),
       });
     }
-  }, 2000);
+  }, 800);
   cleanups.push(() => clearInterval(pollInterval));
 
   return () => {

@@ -1,5 +1,6 @@
 // Serverless Function: /api/state
-// Compatible with Vercel, Netlify, and Node.js serverless runtimes
+// Serves and synchronizes death counter state across OBS Studio, browser controller, and desktop apps
+import { getState, updateState } from './_db.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -10,26 +11,27 @@ export default async function handler(req, res) {
     return res.status(204).end();
   }
 
-  if (req.method === 'GET') {
-    return res.status(200).json({
-      status: 'online',
-      message: 'Souls Game Death Counter API ready',
-      timestamp: Date.now()
-    });
-  }
+  try {
+    if (req.method === 'GET') {
+      const state = await getState();
+      return res.status(200).json(state);
+    }
 
-  if (req.method === 'POST') {
-    try {
+    if (req.method === 'POST') {
       const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
+      const updated = await updateState(body);
       return res.status(200).json({
         ok: true,
-        received: Object.keys(body),
-        timestamp: Date.now()
+        deaths: updated.deaths,
+        sessionDeaths: updated.sessionDeaths,
+        allTimeDeaths: updated.allTimeDeaths,
+        bossKills: updated.bossKills,
+        timestamp: Date.now(),
       });
-    } catch (err) {
-      return res.status(400).json({ error: 'Invalid JSON payload' });
     }
-  }
 
-  return res.status(405).json({ error: 'Method Not Allowed' });
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || 'Internal Server Error' });
+  }
 }

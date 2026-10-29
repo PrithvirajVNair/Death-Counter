@@ -1,8 +1,8 @@
 // Serverless Function: /api/action
-// Compatible with Vercel, Netlify, and Node.js serverless runtimes
+// Processes hotkey daemon events and external counter increments
+import { applyAction } from './_db.js';
 
 export default async function handler(req, res) {
-  // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -23,25 +23,16 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Missing "action" in request body' });
     }
 
-    const normAction = (rawAction === 'add' || rawAction === 'addDeath') ? 'add'
-      : (rawAction === 'undo' || rawAction === 'undoDeath') ? 'undo'
-      : (rawAction === 'addBossKill' || rawAction === 'bossSlain') ? 'addBossKill'
-      : (rawAction === 'undoBossKill') ? 'undoBossKill'
-      : (rawAction === 'set' || rawAction === 'setDeath') ? 'setDeath'
-      : (rawAction === 'setBossKill') ? 'setBossKill'
-      : rawAction;
-
-    const validActions = ['add', 'undo', 'addBossKill', 'undoBossKill', 'setDeath', 'setBossKill'];
-    if (!validActions.includes(normAction)) {
-      return res.status(400).json({ error: `Invalid action: ${rawAction}` });
-    }
+    const { state, normAction } = await applyAction(rawAction, body.value);
 
     return res.status(200).json({
       ok: true,
       action: normAction,
-      value: body.value !== undefined ? Number(body.value) : undefined,
-      processedAt: new Date().toISOString(),
-      timestamp: Date.now()
+      deaths: state.deaths,
+      sessionDeaths: state.sessionDeaths,
+      allTimeDeaths: state.allTimeDeaths,
+      bossKills: state.bossKills,
+      timestamp: Date.now(),
     });
   } catch (err) {
     return res.status(500).json({ error: err.message || 'Internal Server Error' });

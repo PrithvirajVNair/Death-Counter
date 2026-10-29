@@ -1,5 +1,5 @@
 // Serverless Function: /api/reset
-// Compatible with Vercel, Netlify, and Node.js serverless runtimes
+import { resetState } from './_db.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -17,11 +17,16 @@ export default async function handler(req, res) {
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
     const target = body.target || 'session';
+    const state = await resetState(target);
 
     return res.status(200).json({
       ok: true,
       reset: target,
-      timestamp: Date.now()
+      deaths: state.deaths,
+      sessionDeaths: state.sessionDeaths,
+      allTimeDeaths: state.allTimeDeaths,
+      bossKills: state.bossKills,
+      timestamp: Date.now(),
     });
   } catch (err) {
     return res.status(500).json({ error: err.message || 'Internal Server Error' });

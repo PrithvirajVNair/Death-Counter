@@ -202,9 +202,10 @@ export function useDeathCounter() {
         case 'pollSync': {
           const p = msg.payload;
           if (p.deaths !== undefined && p.deaths !== stateRef.current.deaths) {
+            const isIncrease = p.deaths > stateRef.current.deaths;
             setDeaths(p.deaths);
             saveToStorage('deaths', p.deaths);
-            if (p.triggerAnim) {
+            if (p.triggerAnim || isIncrease) {
               triggerAnimRef.current();
             }
           }
@@ -217,9 +218,10 @@ export function useDeathCounter() {
             saveToStorage('allTimeDeaths', p.allTimeDeaths);
           }
           if (p.bossKills !== undefined && p.bossKills !== stateRef.current.bossKills) {
+            const isIncrease = p.bossKills > stateRef.current.bossKills;
             setBossKills(p.bossKills);
             saveToStorage('bossKills', p.bossKills);
-            if (p.triggerAnim) {
+            if (p.triggerAnim || isIncrease) {
               triggerBossAnimRef.current();
             }
           }

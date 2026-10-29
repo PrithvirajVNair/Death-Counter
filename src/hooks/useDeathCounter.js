@@ -225,11 +225,19 @@ export function useDeathCounter() {
         case 'stateUpdate':
         case 'pollSync': {
           const p = msg.payload;
+          const isOverlay = typeof window !== 'undefined' && window.location.pathname.includes('overlay');
           const timeSinceLocalAction = Date.now() - lastLocalActionTimeRef.current;
 
-          // If the user recently performed a local action (within 2 seconds),
-          // reject any background poll carrying older/stale counts to prevent accidental decrementing/rubber-banding
-          if (timeSinceLocalAction < 2000) {
+          // On the controller, if the user recently performed a local action (within 2.5 seconds),
+          // reject background poll to prevent accidental decrementing/rubber-banding
+          if (!isOverlay && timeSinceLocalAction < 2500) {
+            return;
+          }
+
+          // On the controller, background polling must NEVER decrease counts.
+          // This allows global hotkeys from DeathCounterHotkeys.exe to increment counts seamlessly,
+          // while ensuring cold lambdas or network lag never roll back user progress.
+          if (!isOverlay && msg.type === 'pollSync') {
             if (p.deaths !== undefined && p.deaths < stateRef.current.deaths) {
               return;
             }

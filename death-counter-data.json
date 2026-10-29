@@ -1,6 +1,6 @@
 {
-  "deaths": 88,
-  "sessionDeaths": 88,
+  "deaths": 87,
+  "sessionDeaths": 87,
   "allTimeDeaths": 243,
   "bossKills": 22,
   "settings": {
@@ -42,11 +42,6 @@
   },
   "currentBoss": "",
   "history": [
-    {
-      "action": "add",
-      "timestamp": 1793279097578,
-      "value": 18
-    },
     {
       "action": "add",
       "timestamp": 1793279097706,
@@ -541,6 +536,11 @@
       "action": "undo",
       "timestamp": 1793287507452,
       "value": 88
+    },
+    {
+      "action": "undo",
+      "timestamp": 1793287985835,
+      "value": 87
     }
   ]
 }

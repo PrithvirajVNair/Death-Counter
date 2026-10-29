@@ -949,8 +949,10 @@ namespace SoulsGameDeathCounter {
             ThreadPool.QueueUserWorkItem(delegate {
                 try {
                     using (WebClient client = new WebClient()) {
+                        client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
                         client.Headers[HttpRequestHeader.ContentType] = "application/json";
-                        string json = client.DownloadString(serverUrl + "/api/state");
+                        string endpoint = serverUrl.TrimEnd('/') + "/api/state?_t=" + DateTime.UtcNow.Ticks;
+                        string json = client.DownloadString(endpoint);
                         Match mDeaths = Regex.Match(json, @"""deaths""\s*:\s*(\d+)");
                         Match mBoss = Regex.Match(json, @"""bossKills""\s*:\s*(\d+)");
                         string deathCount = mDeaths.Success ? mDeaths.Groups[1].Value : "0";
@@ -1166,6 +1168,7 @@ namespace SoulsGameDeathCounter {
             ThreadPool.QueueUserWorkItem(delegate {
                 try {
                     using (WebClient client = new WebClient()) {
+                        client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
                         client.Headers[HttpRequestHeader.ContentType] = "application/json";
                         string endpoint = serverUrl.TrimEnd('/') + "/api/action";
                         string res = client.UploadString(endpoint, "POST", "{\"action\":\"" + action + "\"}");
@@ -1298,7 +1301,7 @@ namespace SoulsGameDeathCounter {
             } catch {}
 
             try {
-                ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072 | SecurityProtocolType.Tls;
+                ServicePointManager.SecurityProtocol = (SecurityProtocolType)12288 | (SecurityProtocolType)3072 | (SecurityProtocolType)768 | SecurityProtocolType.Tls;
             } catch {}
 
             try {

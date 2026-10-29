@@ -40,8 +40,10 @@ const DEFAULT_STATE = {
   bosses: {},
   currentBoss: '',
   history: [],
-  lastUpdated: Date.now(),
+  lastUpdated: 0,
 };
+
+let lastCloudFetchTime = 0;
 
 function readDiskCache() {
   try {
@@ -63,7 +65,10 @@ async function fetchCloudState() {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 1200);
-    const res = await fetch(CLOUD_SYNC_URL, { signal: controller.signal });
+    const res = await fetch(CLOUD_SYNC_URL, {
+      signal: controller.signal,
+      headers: { 'Cache-Control': 'no-cache' },
+    });
     clearTimeout(timeout);
     if (res.ok) {
       const json = await res.json();
@@ -79,7 +84,10 @@ async function saveCloudState(state) {
     const timeout = setTimeout(() => controller.abort(), 1500);
     await fetch(CLOUD_SYNC_URL, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache',
+      },
       body: JSON.stringify({
         name: 'souls_death_counter_state_v1',
         data: state,
@@ -91,23 +99,30 @@ async function saveCloudState(state) {
 }
 
 export async function getState(forceRefresh = false) {
-  if (!globalThis.__DEATH_COUNTER_STATE__ || forceRefresh) {
-    const disk = readDiskCache();
-    if (disk && !forceRefresh) {
-      globalThis.__DEATH_COUNTER_STATE__ = { ...DEFAULT_STATE, ...disk };
-    } else {
-      const cloud = await fetchCloudState();
-      if (cloud) {
+  const now = Date.now();
+  const needsFetch =
+    !globalThis.__DEATH_COUNTER_STATE__ ||
+    forceRefresh ||
+    now - lastCloudFetchTime > 600;
+
+  if (needsFetch) {
+    lastCloudFetchTime = now;
+    const cloud = await fetchCloudState();
+    if (cloud) {
+      const current = globalThis.__DEATH_COUNTER_STATE__ || readDiskCache() || DEFAULT_STATE;
+      if (!current.lastUpdated || cloud.lastUpdated >= current.lastUpdated) {
         globalThis.__DEATH_COUNTER_STATE__ = { ...DEFAULT_STATE, ...cloud };
         writeDiskCache(globalThis.__DEATH_COUNTER_STATE__);
-      } else if (disk) {
-        globalThis.__DEATH_COUNTER_STATE__ = { ...DEFAULT_STATE, ...disk };
-      } else {
-        globalThis.__DEATH_COUNTER_STATE__ = { ...DEFAULT_STATE };
       }
+    } else if (!globalThis.__DEATH_COUNTER_STATE__) {
+      const disk = readDiskCache();
+      globalThis.__DEATH_COUNTER_STATE__ = disk
+        ? { ...DEFAULT_STATE, ...disk }
+        : { ...DEFAULT_STATE };
     }
   }
-  return globalThis.__DEATH_COUNTER_STATE__;
+
+  return globalThis.__DEATH_COUNTER_STATE__ || { ...DEFAULT_STATE };
 }
 
 export async function updateState(partial = {}) {
@@ -132,7 +147,7 @@ export async function updateState(partial = {}) {
 
   globalThis.__DEATH_COUNTER_STATE__ = next;
   writeDiskCache(next);
-  saveCloudState(next).catch(() => {});
+  await saveCloudState(next);
   return next;
 }
 
@@ -180,7 +195,7 @@ export async function applyAction(rawAction, value) {
   state.lastUpdated = now;
   globalThis.__DEATH_COUNTER_STATE__ = state;
   writeDiskCache(state);
-  saveCloudState(state).catch(() => {});
+  await saveCloudState(state);
 
   return { state, normAction };
 }
@@ -201,6 +216,6 @@ export async function resetState(target = 'session') {
   state.lastUpdated = Date.now();
   globalThis.__DEATH_COUNTER_STATE__ = state;
   writeDiskCache(state);
-  saveCloudState(state).catch(() => {});
+  await saveCloudState(state);
   return state;
 }

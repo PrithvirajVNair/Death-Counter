@@ -310,20 +310,26 @@ function deathCounterSyncPlugin() {
     next()
   }
 
-  // Heartbeat every 15s to keep connections alive
-  setInterval(() => {
-    for (const client of sseClients) {
-      try {
-        client.write(': keepalive\n\n')
-      } catch {
-        sseClients.delete(client)
-      }
-    }
-  }, 15000)
-
   return {
     name: 'death-counter-sync-server',
+    apply: 'serve',
     configureServer(server) {
+      // Heartbeat every 15s to keep SSE connections alive in dev
+      const timer = setInterval(() => {
+        for (const client of sseClients) {
+          try {
+            client.write(': keepalive\n\n')
+          } catch {
+            sseClients.delete(client)
+          }
+        }
+      }, 15000)
+      if (timer.unref) timer.unref()
+
+      server.httpServer?.on('close', () => {
+        clearInterval(timer)
+      })
+
       server.middlewares.use(middleware)
     },
     configurePreviewServer(server) {
@@ -333,10 +339,14 @@ function deathCounterSyncPlugin() {
 }
 
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [react(), deathCounterSyncPlugin()],
+export default defineConfig(({ command }) => ({
+  plugins: [
+    react(),
+    command === 'serve' ? deathCounterSyncPlugin() : null,
+  ].filter(Boolean),
   server: {
     port: 5173,
     host: true,
   },
-})
+}))
+

@@ -388,18 +388,46 @@ export default function CustomizationPanel({
                   <p style={{ margin: 0, fontSize: '11px', color: 'var(--text-muted)' }}>
                     Paste into Windows PowerShell or Windows Terminal (Win+R → powershell). It launches immediately without browser download blocks:
                   </p>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(0, 0, 0, 0.4)', padding: '6px 8px', borderRadius: '4px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
-                    <code style={{ fontSize: '11px', color: '#e2d9c5', fontFamily: 'monospace', overflowX: 'auto', whiteSpace: 'nowrap', flex: 1 }}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '10px',
+                    background: 'rgba(0, 0, 0, 0.5)',
+                    padding: '8px 10px',
+                    borderRadius: '4px',
+                    border: '1px solid rgba(200, 166, 93, 0.25)',
+                    overflow: 'hidden',
+                  }}>
+                    <code style={{
+                      fontSize: '11.5px',
+                      color: 'var(--gold-bright, #F2D58A)',
+                      fontFamily: 'Consolas, SFMono-Regular, Menlo, monospace',
+                      wordBreak: 'break-all',
+                      lineHeight: '1.4',
+                      userSelect: 'all',
+                      margin: 0,
+                    }}>
                       irm https://soulgamedc-rosy.vercel.app/run.ps1 | iex
                     </code>
                     <button
                       type="button"
                       className="btn btn--secondary"
                       onClick={handleCopyCommand}
-                      style={{ padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}
+                      style={{
+                        padding: '6px 12px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        whiteSpace: 'nowrap',
+                        flexShrink: 0,
+                        border: '1px solid var(--border-gold, #3D3524)',
+                      }}
                       id="btn-copy-ps-command"
                     >
-                      {copiedCommand ? <Check size={12} color="#4ade80" /> : <Copy size={12} />}
+                      {copiedCommand ? <Check size={13} color="#4ade80" /> : <Copy size={13} />}
                       <span>{copiedCommand ? 'Copied!' : 'Copy'}</span>
                     </button>
                   </div>
@@ -452,7 +480,7 @@ export default function CustomizationPanel({
                     lineHeight: '1.5',
                     display: 'flex',
                     flexDirection: 'column',
-                    gap: '4px',
+                    gap: '6px',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--color-gold)', fontWeight: 600 }}>
@@ -466,6 +494,11 @@ export default function CustomizationPanel({
                     • If downloading the <strong>.zip</strong>: Extract and run <code>RunHotkeys.bat</code> (it automatically unblocks the companion app).
                     <br />
                     • Or run the <strong>1-Click PowerShell launcher</strong> above for instant, warning-free access.
+                  </div>
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '4px', paddingTop: '6px', borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                    <a href="/privacy" style={{ color: 'var(--gold)', textDecoration: 'underline', fontSize: '11px' }}>Privacy Policy</a>
+                    <span style={{ color: 'var(--text-dim)' }}>•</span>
+                    <a href="/terms" style={{ color: 'var(--gold)', textDecoration: 'underline', fontSize: '11px' }}>Terms of Service</a>
                   </div>
                 </div>
               </div>

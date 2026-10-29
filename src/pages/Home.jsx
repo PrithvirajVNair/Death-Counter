@@ -70,6 +70,23 @@ export default function Home() {
 
       <footer className="home-footer">
         <p>Designed for OBS Studio • Not affiliated with any brand</p>
+        <div style={{ display: 'flex', gap: '14px', justifyContent: 'center', marginTop: '10px', fontSize: '12px' }}>
+          <button
+            type="button"
+            onClick={() => navigate('/privacy')}
+            style={{ background: 'none', border: 'none', color: 'var(--gold, #C8A65D)', textDecoration: 'underline', cursor: 'pointer', fontSize: '12px', padding: 0 }}
+          >
+            Privacy Policy
+          </button>
+          <span style={{ color: 'var(--text-dim, #5C5647)' }}>•</span>
+          <button
+            type="button"
+            onClick={() => navigate('/terms')}
+            style={{ background: 'none', border: 'none', color: 'var(--gold, #C8A65D)', textDecoration: 'underline', cursor: 'pointer', fontSize: '12px', padding: 0 }}
+          >
+            Terms of Service
+          </button>
+        </div>
       </footer>
     </div>
   );

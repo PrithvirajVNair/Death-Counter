@@ -233,6 +233,34 @@ export default function Controller() {
         </div>
       )}
 
+      <footer style={{
+        textAlign: 'center',
+        padding: '24px 16px',
+        fontSize: '11px',
+        color: 'var(--text-dim, #5C5647)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '12px',
+        borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+        marginTop: '32px',
+      }}>
+        <span>Souls Game Death Counter</span>
+        <span>•</span>
+        <a href="/privacy" style={{ color: 'var(--gold, #C8A65D)', textDecoration: 'underline' }}>Privacy Policy</a>
+        <span>•</span>
+        <a href="/terms" style={{ color: 'var(--gold, #C8A65D)', textDecoration: 'underline' }}>Terms of Service</a>
+        <span>•</span>
+        <a
+          href="https://github.com/PrithvirajVNair/Death-Counter"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: 'var(--text-secondary, #9A927E)', textDecoration: 'underline' }}
+        >
+          GitHub
+        </a>
+      </footer>
+
       <ToastContainer />
     </div>
   );

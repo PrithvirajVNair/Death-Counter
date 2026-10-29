@@ -82,24 +82,21 @@ export function useDeathCounter() {
     fetchServerState().then((serverState) => {
       if (!serverState) return;
 
+      const isOverlay = typeof window !== 'undefined' && window.location.pathname.includes('overlay');
       const localDeaths = loadFromStorage('deaths', 0);
       const localSession = loadFromStorage('sessionDeaths', 0);
       const localAllTime = loadFromStorage('allTimeDeaths', 0);
       const localBossKills = loadFromStorage('bossKills', 0);
-      const localLastUpdated = loadFromStorage('lastUpdated', 0);
 
-      // If server state is fresh/cold (0 or missing lastUpdated) but browser has saved progress,
-      // seed the server with the browser's stored progress so a cold server never wipes local data
-      const serverHasData = (serverState.deaths > 0 || serverState.bossKills > 0 || (serverState.lastUpdated && serverState.lastUpdated > 0));
-      const clientHasData = (localDeaths > 0 || localBossKills > 0);
-
-      if (clientHasData && !serverHasData) {
+      // On the controller page, local storage progress is authoritatively preserved on reload.
+      // If local progress is higher than server (e.g. cold serverless instance), seed the server!
+      if (!isOverlay && (localDeaths > (serverState.deaths ?? 0) || localBossKills > (serverState.bossKills ?? 0))) {
         broadcastUpdate('fullSync', {
           deaths: localDeaths,
           sessionDeaths: localSession,
           allTimeDeaths: localAllTime,
           bossKills: localBossKills,
-          lastUpdated: localLastUpdated || Date.now(),
+          lastUpdated: Date.now(),
         });
         return;
       }

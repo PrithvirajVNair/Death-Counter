@@ -89,7 +89,13 @@ export function broadcastUpdate(type, payload) {
  */
 export async function fetchServerState() {
   try {
-    const res = await fetch('/api/state');
+    const res = await fetch(`/api/state?_t=${Date.now()}`, {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache',
+      },
+    });
     if (res.ok) {
       return await res.json();
     }

@@ -1,0 +1,6 @@
+{
+  "serverUrl": "https://soulgamedc-rosy.vercel.app",
+  "addDeath": "F8",
+  "undoDeath": "F7",
+  "enabled": true
+}

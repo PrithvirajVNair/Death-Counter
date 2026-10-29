@@ -4,10 +4,22 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Net;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
+
+[assembly: AssemblyTitle("Souls Game Death Counter Hotkeys")]
+[assembly: AssemblyDescription("Global hotkey companion app for Souls Game Death Counter OBS overlay")]
+[assembly: AssemblyConfiguration("")]
+[assembly: AssemblyCompany("Souls Death Counter Open Source Community")]
+[assembly: AssemblyProduct("Souls Game Death Counter")]
+[assembly: AssemblyCopyright("Copyright (c) 2026 Open Source MIT")]
+[assembly: AssemblyTrademark("")]
+[assembly: AssemblyCulture("")]
+[assembly: AssemblyVersion("2.1.0.0")]
+[assembly: AssemblyFileVersion("2.1.0.0")]
 
 namespace SoulsGameDeathCounter {
     public class HotkeyBinding {

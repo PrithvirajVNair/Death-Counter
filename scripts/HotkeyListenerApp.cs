@@ -237,7 +237,7 @@ namespace SoulsGameDeathCounter {
         const int DEFAULT_UNDO_KEY = 0x76;      // F7
         const int DEFAULT_ADD_BOSS_KEY = 0x78;  // F9
         const int DEFAULT_UNDO_BOSS_KEY = 0x79; // F10
-        const string DEFAULT_SERVER_URL = "http://localhost:5173";
+        const string DEFAULT_SERVER_URL = "https://soulgamedc-rosy.vercel.app";
 
         // State
         private static bool isInitializing = true;

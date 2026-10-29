@@ -25,7 +25,9 @@ export default function OverlayPreview({
     };
   }, [settings, previewMode]);
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173';
+  const origin = typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('undefined')
+    ? window.location.origin
+    : 'https://soulgamedc-rosy.vercel.app';
   const currentPreviewObsUrl = useMemo(() => {
     const preset = settings?.preset || 'classic-rune';
     const colorParam = settings?.goldColor ? `&goldColor=${encodeURIComponent(settings.goldColor)}` : '';

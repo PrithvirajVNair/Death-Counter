@@ -28,7 +28,9 @@ export default function CounterControls({
   const [isEditingBoss, setIsEditingBoss] = useState(false);
   const [bossInput, setBossInput] = useState('');
 
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173';
+  const origin = typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('undefined')
+    ? window.location.origin
+    : 'https://soulgamedc-rosy.vercel.app';
   const colorParam = goldColor ? `&goldColor=${encodeURIComponent(goldColor)}` : '';
   const bossOverlayUrl = `${origin}/overlay?preset=${preset}&mode=boss-slain${colorParam}`;
   const deathOverlayUrl = `${origin}/overlay?preset=${preset}${colorParam}`;

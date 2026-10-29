@@ -1,7 +1,7 @@
 {
   "deaths": 88,
   "sessionDeaths": 88,
-  "allTimeDeaths": 237,
+  "allTimeDeaths": 243,
   "bossKills": 22,
   "settings": {
     "preset": "classic-rune",
@@ -42,66 +42,6 @@
   },
   "currentBoss": "",
   "history": [
-    {
-      "action": "add",
-      "timestamp": 1793279095873,
-      "value": 6
-    },
-    {
-      "action": "add",
-      "timestamp": 1793279096010,
-      "value": 7
-    },
-    {
-      "action": "add",
-      "timestamp": 1793279096289,
-      "value": 8
-    },
-    {
-      "action": "add",
-      "timestamp": 1793279096409,
-      "value": 9
-    },
-    {
-      "action": "add",
-      "timestamp": 1793279096593,
-      "value": 10
-    },
-    {
-      "action": "add",
-      "timestamp": 1793279096786,
-      "value": 11
-    },
-    {
-      "action": "add",
-      "timestamp": 1793279096994,
-      "value": 12
-    },
-    {
-      "action": "add",
-      "timestamp": 1793279097098,
-      "value": 13
-    },
-    {
-      "action": "add",
-      "timestamp": 1793279097184,
-      "value": 14
-    },
-    {
-      "action": "add",
-      "timestamp": 1793279097297,
-      "value": 15
-    },
-    {
-      "action": "add",
-      "timestamp": 1793279097385,
-      "value": 16
-    },
-    {
-      "action": "add",
-      "timestamp": 1793279097489,
-      "value": 17
-    },
     {
       "action": "add",
       "timestamp": 1793279097578,
@@ -540,6 +480,66 @@
     {
       "action": "set",
       "timestamp": 1793285444148,
+      "value": 88
+    },
+    {
+      "action": "add",
+      "timestamp": 1793287439013,
+      "value": 89
+    },
+    {
+      "action": "undo",
+      "timestamp": 1793287442135,
+      "value": 88
+    },
+    {
+      "action": "add",
+      "timestamp": 1793287444766,
+      "value": 89
+    },
+    {
+      "action": "add",
+      "timestamp": 1793287445187,
+      "value": 90
+    },
+    {
+      "action": "undo",
+      "timestamp": 1793287445815,
+      "value": 89
+    },
+    {
+      "action": "add",
+      "timestamp": 1793287489908,
+      "value": 90
+    },
+    {
+      "action": "undo",
+      "timestamp": 1793287491636,
+      "value": 89
+    },
+    {
+      "action": "undo",
+      "timestamp": 1793287492552,
+      "value": 88
+    },
+    {
+      "action": "add",
+      "timestamp": 1793287493086,
+      "value": 89
+    },
+    {
+      "action": "add",
+      "timestamp": 1793287493724,
+      "value": 90
+    },
+    {
+      "action": "undo",
+      "timestamp": 1793287506319,
+      "value": 89
+    },
+    {
+      "action": "undo",
+      "timestamp": 1793287507452,
       "value": 88
     }
   ]

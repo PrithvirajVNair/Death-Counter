@@ -1,0 +1,546 @@
+{
+  "deaths": 88,
+  "sessionDeaths": 88,
+  "allTimeDeaths": 237,
+  "bossKills": 22,
+  "settings": {
+    "preset": "classic-rune",
+    "fontSize": 72,
+    "labelVisible": true,
+    "runeVisible": true,
+    "goldColor": "#C8A65D",
+    "glowIntensity": 0.6,
+    "alignment": "center",
+    "layout": "horizontal",
+    "frameVisible": true,
+    "animationsEnabled": true,
+    "animationIntensity": 0.7,
+    "padding": 20,
+    "scale": 1,
+    "sessionCountVisible": false,
+    "bossAttemptsInOverlay": false,
+    "showBossKills": false,
+    "overlayMode": "deaths",
+    "presetColors": {
+      "classic-rune": "#C8A65D",
+      "minimal": "#C8A65D",
+      "ornamental-frame": "#C8A65D",
+      "crimson-death": "#C8A65D",
+      "vertical-rune": "#C8A65D",
+      "landscape": "#C8A65D"
+    }
+  },
+  "shortcuts": {
+    "addDeath": "F8",
+    "undoDeath": "F7",
+    "addBossKill": "F9",
+    "undoBossKill": "F10",
+    "enabled": true
+  },
+  "bosses": {
+    "ss": 3
+  },
+  "currentBoss": "",
+  "history": [
+    {
+      "action": "add",
+      "timestamp": 1793279095873,
+      "value": 6
+    },
+    {
+      "action": "add",
+      "timestamp": 1793279096010,
+      "value": 7
+    },
+    {
+      "action": "add",
+      "timestamp": 1793279096289,
+      "value": 8
+    },
+    {
+      "action": "add",
+      "timestamp": 1793279096409,
+      "value": 9
+    },
+    {
+      "action": "add",
+      "timestamp": 1793279096593,
+      "value": 10
+    },
+    {
+      "action": "add",
+      "timestamp": 1793279096786,
+      "value": 11
+    },
+    {
+      "action": "add",
+      "timestamp": 1793279096994,
+      "value": 12
+    },
+    {
+      "action": "add",
+      "timestamp": 1793279097098,
+      "value": 13
+    },
+    {
+      "action": "add",
+      "timestamp": 1793279097184,
+      "value": 14
+    },
+    {
+      "action": "add",
+      "timestamp": 1793279097297,
+      "value": 15
+    },
+    {
+      "action": "add",
+      "timestamp": 1793279097385,
+      "value": 16
+    },
+    {
+      "action": "add",
+      "timestamp": 1793279097489,
+      "value": 17
+    },
+    {
+      "action": "add",
+      "timestamp": 1793279097578,
+      "value": 18
+    },
+    {
+      "action": "add",
+      "timestamp": 1793279097706,
+      "value": 19
+    },
+    {
+      "action": "add",
+      "timestamp": 1793279097776,
+      "value": 20
+    },
+    {
+      "action": "add",
+      "timestamp": 1793280566065,
+      "value": 21
+    },
+    {
+      "action": "add",
+      "timestamp": 1793280568396,
+      "value": 22
+    },
+    {
+      "action": "add",
+      "timestamp": 1793280572599,
+      "value": 23
+    },
+    {
+      "action": "add",
+      "timestamp": 1793280760589,
+      "value": 24
+    },
+    {
+      "action": "add",
+      "timestamp": 1793280761339,
+      "value": 25
+    },
+    {
+      "action": "add",
+      "timestamp": 1793280761980,
+      "value": 26
+    },
+    {
+      "action": "add",
+      "timestamp": 1793280764488,
+      "value": 27
+    },
+    {
+      "action": "add",
+      "timestamp": 1793281988552,
+      "value": 28
+    },
+    {
+      "action": "add",
+      "timestamp": 1793281989145,
+      "value": 29
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282009264,
+      "value": 30
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282010339,
+      "value": 31
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282010818,
+      "value": 32
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282011683,
+      "value": 33
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282012285,
+      "value": 34
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282013095,
+      "value": 35
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282013476,
+      "value": 36
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282013873,
+      "value": 37
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282017363,
+      "value": 38
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282017721,
+      "value": 39
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282018129,
+      "value": 40
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282018666,
+      "value": 41
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282019276,
+      "value": 42
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282019928,
+      "value": 43
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282020488,
+      "value": 44
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282021071,
+      "value": 45
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282021556,
+      "value": 46
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282022033,
+      "value": 47
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282022478,
+      "value": 48
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282024122,
+      "value": 49
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282024841,
+      "value": 50
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282025476,
+      "value": 51
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282026085,
+      "value": 52
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282026672,
+      "value": 53
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282027270,
+      "value": 54
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282027851,
+      "value": 55
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282028491,
+      "value": 56
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282029155,
+      "value": 57
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282029871,
+      "value": 58
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282030370,
+      "value": 59
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282031471,
+      "value": 60
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282032898,
+      "value": 61
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282033864,
+      "value": 62
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282034719,
+      "value": 63
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282035449,
+      "value": 64
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282036285,
+      "value": 65
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282037108,
+      "value": 66
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282038233,
+      "value": 67
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282043585,
+      "value": 68
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282044794,
+      "value": 69
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282045874,
+      "value": 70
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282046756,
+      "value": 71
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282047659,
+      "value": 72
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282084304,
+      "value": 73
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282084715,
+      "value": 74
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282086593,
+      "value": 75
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282087156,
+      "value": 76
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282087533,
+      "value": 77
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282088642,
+      "value": 78
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282115824,
+      "value": 79
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282116282,
+      "value": 80
+    },
+    {
+      "action": "undo",
+      "timestamp": 1793282160856,
+      "value": 79
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282161607,
+      "value": 80
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282162381,
+      "value": 81
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282163463,
+      "value": 82
+    },
+    {
+      "action": "undo",
+      "timestamp": 1793282165777,
+      "value": 81
+    },
+    {
+      "action": "undo",
+      "timestamp": 1793282166271,
+      "value": 80
+    },
+    {
+      "action": "undo",
+      "timestamp": 1793282166764,
+      "value": 79
+    },
+    {
+      "action": "add",
+      "timestamp": 1793282167216,
+      "value": 80
+    },
+    {
+      "action": "add",
+      "timestamp": 1793283832115,
+      "value": 81
+    },
+    {
+      "action": "undo",
+      "timestamp": 1793283838722,
+      "value": 80
+    },
+    {
+      "action": "add",
+      "timestamp": 1793283839879,
+      "value": 81
+    },
+    {
+      "action": "add",
+      "timestamp": 1793283840272,
+      "value": 82
+    },
+    {
+      "action": "undo",
+      "timestamp": 1793283845090,
+      "value": 81
+    },
+    {
+      "action": "undo",
+      "timestamp": 1793283845617,
+      "value": 80
+    },
+    {
+      "action": "add",
+      "timestamp": 1793285146406,
+      "value": 81
+    },
+    {
+      "action": "undo",
+      "timestamp": 1793285148638,
+      "value": 80
+    },
+    {
+      "action": "add",
+      "timestamp": 1793285315375,
+      "value": 81
+    },
+    {
+      "action": "add",
+      "timestamp": 1793285315985,
+      "value": 82
+    },
+    {
+      "action": "add",
+      "timestamp": 1793285316816,
+      "value": 83
+    },
+    {
+      "action": "add",
+      "timestamp": 1793285317695,
+      "value": 84
+    },
+    {
+      "action": "add",
+      "timestamp": 1793285324921,
+      "value": 85
+    },
+    {
+      "action": "add",
+      "timestamp": 1793285346434,
+      "value": 86
+    },
+    {
+      "action": "add",
+      "timestamp": 1793285351464,
+      "value": 87
+    },
+    {
+      "action": "add",
+      "timestamp": 1793285352980,
+      "value": 88
+    },
+    {
+      "action": "set",
+      "timestamp": 1793285444148,
+      "value": 88
+    }
+  ]
+}

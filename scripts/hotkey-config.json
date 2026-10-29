@@ -1,0 +1,6 @@
+{
+  "serverUrl": "http://localhost:5173",
+  "addDeath": "F8",
+  "undoDeath": "F7",
+  "enabled": true
+}

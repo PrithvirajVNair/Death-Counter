@@ -1,0 +1,398 @@
+/* ══════════════════════════════════════════════════════════════
+   Death Counter — Overlay Styles
+   All overlay presets and animations for the OBS browser source
+   ══════════════════════════════════════════════════════════════ */
+
+/* ─── Overlay page: fully transparent ─── */
+.overlay-html,
+.overlay-body {
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  overflow: hidden !important;
+}
+
+.overlay-page {
+  background: transparent;
+  width: 100%;
+  min-height: 100vh;
+  box-sizing: border-box;
+}
+
+/* ─── Death counter root ─── */
+.death-counter-root {
+  display: inline-block;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* ─── Shared overlay preset styles ─── */
+.overlay-preset {
+  font-family: 'Cinzel', 'Georgia', serif;
+  user-select: none;
+  position: relative;
+}
+
+/* ─── Death & Boss Slain pulse animations ─── */
+@keyframes death-glow {
+  0% { filter: brightness(1); }
+  20% { filter: brightness(1.6); }
+  100% { filter: brightness(1); }
+}
+
+@keyframes boss-slain-flare {
+  0% { filter: brightness(1) drop-shadow(0 0 0 rgba(200, 166, 93, 0)); transform: scale(1); }
+  25% { filter: brightness(2.1) drop-shadow(0 0 45px rgba(255, 220, 120, 0.95)); transform: scale(1.05); }
+  60% { filter: brightness(1.3) drop-shadow(0 0 20px rgba(200, 166, 93, 0.5)); transform: scale(1.01); }
+  100% { filter: brightness(1) drop-shadow(0 0 0 rgba(200, 166, 93, 0)); transform: scale(1); }
+}
+
+.death-pulse {
+  animation: death-glow 0.8s ease-out;
+}
+
+.active-pulse {
+  animation: boss-slain-flare 1s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ──────────────────────────────────────
+   PRESET: Classic Rune
+   ────────────────────────────────────── */
+.classic-rune__inner {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.classic-rune__emblem {
+  flex-shrink: 0;
+  animation: rune-idle 8s ease-in-out infinite;
+}
+
+@keyframes rune-idle {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; }
+}
+
+.classic-rune__content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 100px;
+}
+
+.classic-rune__line-top,
+.classic-rune__line-bottom {
+  width: 100%;
+  height: 1px;
+}
+
+.classic-rune__label {
+  font-size: 12px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.classic-rune__number {
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 2px;
+}
+
+.classic-rune__session,
+.classic-rune__boss {
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+
+/* ──────────────────────────────────────
+   PRESET: Minimal
+   ────────────────────────────────────── */
+.minimal__inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.minimal__sigil,
+.minimal__icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.minimal__both {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.minimal__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.minimal__number {
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 1px;
+}
+
+.minimal__session,
+.minimal__boss {
+  font-family: 'Inter', sans-serif;
+  margin-left: 4px;
+}
+
+.classic-rune__icon-badge,
+.ornamental-frame__icon-badge,
+.crimson-death__icon-badge,
+.vertical-rune__icon-badge,
+.landscape__icon-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1;
+}
+
+/* ──────────────────────────────────────
+   PRESET: Ornamental Frame
+   ────────────────────────────────────── */
+.ornamental-frame__inner {
+  position: relative;
+  border: 1px solid;
+  padding: 20px 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.ornamental-frame__corner {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+}
+
+.ornamental-frame__corner--tl {
+  top: -1px;
+  left: -1px;
+  border-top: 2px solid;
+  border-left: 2px solid;
+}
+
+.ornamental-frame__corner--tr {
+  top: -1px;
+  right: -1px;
+  border-top: 2px solid;
+  border-right: 2px solid;
+}
+
+.ornamental-frame__corner--bl {
+  bottom: -1px;
+  left: -1px;
+  border-bottom: 2px solid;
+  border-left: 2px solid;
+}
+
+.ornamental-frame__corner--br {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 2px solid;
+  border-right: 2px solid;
+}
+
+.ornamental-frame__top-ornament,
+.ornamental-frame__bottom-ornament {
+  display: flex;
+  justify-content: center;
+}
+
+.ornamental-frame__label {
+  font-size: 11px;
+  letter-spacing: 5px;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.ornamental-frame__number {
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 2px;
+}
+
+.ornamental-frame__session,
+.ornamental-frame__boss {
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+}
+
+/* ──────────────────────────────────────
+   PRESET: Crimson Death
+   ────────────────────────────────────── */
+.crimson-death {
+  position: relative;
+}
+
+.crimson-death__flash {
+  position: absolute;
+  inset: -20px;
+  background: radial-gradient(ellipse, rgba(118, 45, 45, 0.4) 0%, transparent 70%);
+  animation: crimson-burst 0.8s ease-out forwards;
+  pointer-events: none;
+}
+
+@keyframes crimson-burst {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.crimson-death__inner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  position: relative;
+  z-index: 1;
+}
+
+.crimson-death__emblem {
+  flex-shrink: 0;
+}
+
+.crimson-death__content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.crimson-death__label {
+  font-size: 11px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.crimson-death__number {
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 2px;
+}
+
+.crimson-death__underline {
+  height: 1px;
+  width: 100%;
+}
+
+.crimson-death__session,
+.crimson-death__boss {
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+}
+
+/* ──────────────────────────────────────
+   PRESET: Vertical Rune
+   ────────────────────────────────────── */
+.vertical-rune__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.vertical-rune__emblem {
+  animation: rune-idle 8s ease-in-out infinite;
+}
+
+.vertical-rune__label {
+  font-size: 11px;
+  letter-spacing: 5px;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.vertical-rune__number {
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 2px;
+}
+
+.vertical-rune__session,
+.vertical-rune__boss {
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+}
+
+/* ──────────────────────────────────────
+   PRESET: Landscape
+   ────────────────────────────────────── */
+.landscape__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.landscape__scenery {
+  opacity: 0.6;
+}
+
+.landscape__content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.landscape__left {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.landscape__label {
+  font-size: 11px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.landscape__divider {
+  width: 1px;
+  height: 40px;
+}
+
+.landscape__number {
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 2px;
+}
+
+.landscape__session {
+  font-family: 'Inter', sans-serif;
+}
+
+.landscape__boss {
+  font-family: 'Inter', sans-serif;
+  font-size: 11px;
+}
+
+.landscape__bottom-line {
+  width: 200px;
+  height: 1px;
+}
+
+/* ─── Reduced motion ─── */
+@media (prefers-reduced-motion: reduce) {
+  .death-pulse,
+  .crimson-death__flash,
+  .classic-rune__emblem,
+  .vertical-rune__emblem {
+    animation: none !important;
+  }
+}

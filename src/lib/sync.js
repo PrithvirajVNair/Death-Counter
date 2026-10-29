@@ -171,7 +171,12 @@ export function onSyncMessage(callback) {
   window.addEventListener('storage', storageHandler);
   cleanups.push(() => window.removeEventListener('storage', storageHandler));
 
-  // ─── 4. Periodic polling safety net (every 800ms for responsive OBS overlay sync) ───
+  // ─── 4. Periodic polling safety net ───
+  // OBS Studio Browser Source runs on /overlay and polls at 800ms for real-time responsiveness.
+  // The Controller page runs on / or /controller and polls at 3000ms to eliminate any clicking interference.
+  const isOverlayPage = typeof window !== 'undefined' && window.location.pathname.includes('overlay');
+  const pollIntervalMs = isOverlayPage ? 800 : 3000;
+
   const pollInterval = setInterval(async () => {
     const serverState = await fetchServerState();
     if (serverState) {
@@ -182,7 +187,7 @@ export function onSyncMessage(callback) {
         timestamp: Date.now(),
       });
     }
-  }, 800);
+  }, pollIntervalMs);
   cleanups.push(() => clearInterval(pollInterval));
 
   return () => {

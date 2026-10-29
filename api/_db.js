@@ -1,8 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 
-const CLOUD_SYNC_ID = 'ff808181a09d98f701a1884e8d4951f3';
-const CLOUD_SYNC_URL = `https://api.restful-api.dev/objects/${CLOUD_SYNC_ID}`;
 const TMP_FILE_PATH = path.join('/tmp', 'death-counter-data.json');
 
 const DEFAULT_STATE = {
@@ -43,8 +41,6 @@ const DEFAULT_STATE = {
   lastUpdated: 0,
 };
 
-let lastCloudFetchTime = 0;
-
 function readDiskCache() {
   try {
     if (fs.existsSync(TMP_FILE_PATH)) {
@@ -61,72 +57,18 @@ function writeDiskCache(state) {
   } catch {}
 }
 
-async function fetchCloudState() {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1200);
-    const res = await fetch(CLOUD_SYNC_URL, {
-      signal: controller.signal,
-      headers: { 'Cache-Control': 'no-cache' },
-    });
-    clearTimeout(timeout);
-    if (res.ok) {
-      const json = await res.json();
-      return json?.data || null;
-    }
-  } catch {}
-  return null;
-}
-
-async function saveCloudState(state) {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1500);
-    await fetch(CLOUD_SYNC_URL, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache',
-      },
-      body: JSON.stringify({
-        name: 'souls_death_counter_state_v1',
-        data: state,
-      }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-  } catch {}
-}
-
-export async function getState(forceRefresh = false) {
-  const now = Date.now();
-  const needsFetch =
-    !globalThis.__DEATH_COUNTER_STATE__ ||
-    forceRefresh ||
-    now - lastCloudFetchTime > 600;
-
-  if (needsFetch) {
-    lastCloudFetchTime = now;
-    const cloud = await fetchCloudState();
-    if (cloud) {
-      const current = globalThis.__DEATH_COUNTER_STATE__ || readDiskCache() || DEFAULT_STATE;
-      if (!current.lastUpdated || cloud.lastUpdated >= current.lastUpdated) {
-        globalThis.__DEATH_COUNTER_STATE__ = { ...DEFAULT_STATE, ...cloud };
-        writeDiskCache(globalThis.__DEATH_COUNTER_STATE__);
-      }
-    } else if (!globalThis.__DEATH_COUNTER_STATE__) {
-      const disk = readDiskCache();
-      globalThis.__DEATH_COUNTER_STATE__ = disk
-        ? { ...DEFAULT_STATE, ...disk }
-        : { ...DEFAULT_STATE };
-    }
+export function getState() {
+  if (!globalThis.__DEATH_COUNTER_STATE__) {
+    const disk = readDiskCache();
+    globalThis.__DEATH_COUNTER_STATE__ = disk
+      ? { ...DEFAULT_STATE, ...disk }
+      : { ...DEFAULT_STATE };
   }
-
-  return globalThis.__DEATH_COUNTER_STATE__ || { ...DEFAULT_STATE };
+  return globalThis.__DEATH_COUNTER_STATE__;
 }
 
-export async function updateState(partial = {}) {
-  const current = await getState();
+export function updateState(partial = {}) {
+  const current = getState();
 
   // Reject out-of-order stale updates if an older network packet arrives
   if (partial.lastUpdated && current.lastUpdated && partial.lastUpdated < current.lastUpdated) {
@@ -153,12 +95,11 @@ export async function updateState(partial = {}) {
 
   globalThis.__DEATH_COUNTER_STATE__ = next;
   writeDiskCache(next);
-  await saveCloudState(next);
   return next;
 }
 
-export async function applyAction(rawAction, value) {
-  const state = await getState();
+export function applyAction(rawAction, value) {
+  const state = getState();
   const now = Date.now();
 
   const normAction =
@@ -201,13 +142,12 @@ export async function applyAction(rawAction, value) {
   state.lastUpdated = now;
   globalThis.__DEATH_COUNTER_STATE__ = state;
   writeDiskCache(state);
-  await saveCloudState(state);
 
   return { state, normAction };
 }
 
-export async function resetState(target = 'session') {
-  const state = await getState();
+export function resetState(target = 'session') {
+  const state = getState();
   state.deaths = 0;
   state.sessionDeaths = 0;
   state.history = [];
@@ -222,6 +162,5 @@ export async function resetState(target = 'session') {
   state.lastUpdated = Date.now();
   globalThis.__DEATH_COUNTER_STATE__ = state;
   writeDiskCache(state);
-  await saveCloudState(state);
   return state;
 }

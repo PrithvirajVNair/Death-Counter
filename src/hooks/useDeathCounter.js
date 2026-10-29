@@ -81,6 +81,29 @@ export function useDeathCounter() {
   useEffect(() => {
     fetchServerState().then((serverState) => {
       if (!serverState) return;
+
+      const localDeaths = loadFromStorage('deaths', 0);
+      const localSession = loadFromStorage('sessionDeaths', 0);
+      const localAllTime = loadFromStorage('allTimeDeaths', 0);
+      const localBossKills = loadFromStorage('bossKills', 0);
+      const localLastUpdated = loadFromStorage('lastUpdated', 0);
+
+      // If server state is fresh/cold (0 or missing lastUpdated) but browser has saved progress,
+      // seed the server with the browser's stored progress so a cold server never wipes local data
+      const serverHasData = (serverState.deaths > 0 || serverState.bossKills > 0 || (serverState.lastUpdated && serverState.lastUpdated > 0));
+      const clientHasData = (localDeaths > 0 || localBossKills > 0);
+
+      if (clientHasData && !serverHasData) {
+        broadcastUpdate('fullSync', {
+          deaths: localDeaths,
+          sessionDeaths: localSession,
+          allTimeDeaths: localAllTime,
+          bossKills: localBossKills,
+          lastUpdated: localLastUpdated || Date.now(),
+        });
+        return;
+      }
+
       if (serverState.deaths !== undefined) {
         setDeaths(serverState.deaths);
         saveToStorage('deaths', serverState.deaths);
@@ -96,6 +119,9 @@ export function useDeathCounter() {
       if (serverState.bossKills !== undefined) {
         setBossKills(serverState.bossKills);
         saveToStorage('bossKills', serverState.bossKills);
+      }
+      if (serverState.lastUpdated) {
+        saveToStorage('lastUpdated', serverState.lastUpdated);
       }
       if (serverState.settings) {
         setSettings((prev) => {
@@ -294,6 +320,7 @@ export function useDeathCounter() {
     saveToStorage('sessionDeaths', nextSession);
     saveToStorage('allTimeDeaths', nextAllTime);
     saveToStorage('history', nextHistory);
+    saveToStorage('lastUpdated', Date.now());
 
     broadcastUpdate('deaths', {
       deaths: nextDeaths,
@@ -321,6 +348,7 @@ export function useDeathCounter() {
     saveToStorage('deaths', nextDeaths);
     saveToStorage('sessionDeaths', nextSession);
     saveToStorage('history', nextHistory);
+    saveToStorage('lastUpdated', Date.now());
 
     broadcastUpdate('deaths', {
       deaths: nextDeaths,
@@ -518,6 +546,7 @@ export function useDeathCounter() {
     saveToStorage('sessionDeaths', nextSession);
     saveToStorage('allTimeDeaths', nextAllTime);
     saveToStorage('history', nextHistory);
+    saveToStorage('lastUpdated', Date.now());
 
     broadcastUpdate('deaths', {
       deaths: nextDeaths,

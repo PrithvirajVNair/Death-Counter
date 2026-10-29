@@ -350,33 +350,44 @@ export default function CustomizationPanel({
             </div>
 
             <div className="setting-group">
-              <label className="setting-label">PC Hotkey App</label>
+              <label className="setting-label">PC Hotkey Companion App</label>
               <div className="hotkey-download-card">
-                <p>Run this app on your PC to enable global hotkeys in Souls games without keeping your browser open:</p>
-                <a
-                  href="/DeathCounterHotkeys.exe"
-                  download="DeathCounterHotkeys.exe"
-                  className="btn btn--primary btn--full"
-                  style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px 14px', fontWeight: 600 }}
-                  id="btn-download-app"
-                >
-                  <Download size={15} />
-                  <span>Download App</span>
-                </a>
-                <span
-                  className="setting-hint"
+                <p>Run this companion app on your PC to trigger hotkeys globally while playing fullscreen Souls games:</p>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <a
+                    href="/DeathCounterHotkeys.zip"
+                    download="DeathCounterHotkeys.zip"
+                    className="btn btn--primary"
+                    style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px 14px', fontWeight: 600, flex: '1 1 180px' }}
+                    id="btn-download-app-zip"
+                  >
+                    <Download size={15} />
+                    <span>Download App (.zip)</span>
+                  </a>
+                  <a
+                    href="/DeathCounterHotkeys.exe"
+                    download="DeathCounterHotkeys.exe"
+                    className="btn btn--secondary"
+                    style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '10px 12px', fontSize: '12px' }}
+                    id="btn-download-app-exe"
+                  >
+                    <span>.exe direct</span>
+                  </a>
+                </div>
+                <div
                   style={{
-                    display: 'block',
-                    marginTop: '4px',
+                    marginTop: '8px',
+                    padding: '8px 10px',
+                    background: 'rgba(200, 166, 93, 0.08)',
+                    border: '1px solid rgba(200, 166, 93, 0.25)',
+                    borderRadius: '4px',
                     fontSize: '11px',
-                    color: 'var(--text-muted)',
-                    whiteSpace: 'normal',
+                    color: '#d4c4a8',
                     lineHeight: '1.45',
-                    wordBreak: 'break-word',
                   }}
                 >
-                  Open the app and click the green button to activate hotkeys in-game.
-                </span>
+                  <strong style={{ color: 'var(--color-gold)' }}>Windows SmartScreen note:</strong> If Windows shows <em>"Windows protected your PC"</em> on first launch, click <strong>More info</strong> → <strong>Run anyway</strong>. (Standard for independent open-source tools without an enterprise certificate).
+                </div>
               </div>
             </div>
           </div>

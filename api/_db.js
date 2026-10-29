@@ -70,11 +70,6 @@ export function getState() {
 export function updateState(partial = {}) {
   const current = getState();
 
-  // Reject out-of-order stale updates if an older network packet arrives
-  if (partial.lastUpdated && current.lastUpdated && partial.lastUpdated < current.lastUpdated) {
-    return current;
-  }
-
   const next = {
     ...current,
     ...partial,

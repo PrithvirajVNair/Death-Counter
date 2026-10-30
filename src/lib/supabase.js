@@ -33,6 +33,46 @@ export function getStreamerKey(user) {
 }
 
 /**
+ * Regenerate a new unique streamer key for user, updating both Supabase tables and user metadata
+ */
+export async function regenerateStreamerKey(user) {
+  if (!user || !supabase) return null;
+  const prefix = user.email
+    ? user.email
+        .split("@")[0]
+        .replace(/[^a-zA-Z0-9]/g, "")
+        .toLowerCase()
+    : "user";
+  const rand = Math.random().toString(36).substring(2, 8);
+  const newKey = `${prefix}-${rand}`;
+
+  // 1. Update public.streamer_states table with new key
+  try {
+    const { error: stateError } = await supabase
+      .from("streamer_states")
+      .update({ streamer_key: newKey, updated_at: new Date().toISOString() })
+      .eq("user_id", user.id);
+
+    if (stateError) {
+      console.warn("Could not update streamer_states directly:", stateError);
+    }
+  } catch (e) {
+    console.warn("streamer_states update failed:", e);
+  }
+
+  // 2. Update user metadata in Supabase Auth
+  const { error } = await supabase.auth.updateUser({
+    data: { streamerKey: newKey },
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  return newKey;
+}
+
+/**
  * Sign in with Google OAuth
  */
 export async function signInWithGoogle() {

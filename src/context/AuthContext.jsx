@@ -7,6 +7,7 @@ import {
   signUpWithEmail,
   signOutUser,
   saveCloudState,
+  regenerateStreamerKey,
 } from "../lib/supabase";
 import { clearAllStorage } from "../lib/storage";
 
@@ -65,6 +66,18 @@ export function AuthProvider({ children }) {
     window.location.reload();
   };
 
+  const handleRegenerateKey = async () => {
+    if (!user) return null;
+    const newKey = await regenerateStreamerKey(user);
+    if (newKey) {
+      const { data: { user: freshUser } } = await supabase.auth.getUser();
+      if (freshUser) {
+        setUser(freshUser);
+      }
+    }
+    return newKey;
+  };
+
   const value = {
     user,
     session,
@@ -74,6 +87,7 @@ export function AuthProvider({ children }) {
     signInWithEmail,
     signUpWithEmail,
     signOut: handleSignOut,
+    regenerateKey: handleRegenerateKey,
     saveCloudState: (state) => saveCloudState(user, state),
   };
 

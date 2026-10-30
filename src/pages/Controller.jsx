@@ -3,6 +3,7 @@ import { useDeathCounter } from '../hooks/useDeathCounter';
 import { useAuth } from '../context/AuthContext';
 import AuthModal from '../components/AuthModal';
 import ShareRemoteModal from '../components/ShareRemoteModal';
+import RegenerateKeyModal from '../components/RegenerateKeyModal';
 import CounterControls from '../components/CounterControls';
 import OverlayPreview from '../components/OverlayPreview';
 import PresetSelector from '../components/PresetSelector';
@@ -11,7 +12,7 @@ import Embers from '../components/Embers';
 import ToastContainer, { showToast } from '../components/Toast';
 import { DEFAULT_PRESET_COLORS } from '../lib/defaults';
 import { loadCloudStateByKey, supabase } from '../lib/supabase';
-import { Key, Copy, Check, LogOut, Radio, Users, Eye, EyeOff } from 'lucide-react';
+import { Key, Copy, Check, LogOut, Radio, Users, Eye, EyeOff, RefreshCw } from 'lucide-react';
 import '../styles/controller.css';
 import '../styles/auth.css';
 
@@ -21,6 +22,7 @@ export default function Controller() {
   const [copiedKey, setCopiedKey] = useState(false);
   const [showStreamerKey, setShowStreamerKey] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [regenModalOpen, setRegenModalOpen] = useState(false);
 
   const {
     deaths, sessionDeaths, allTimeDeaths, bossKills, settings, shortcuts, deathAnim, bossSlainAnim,
@@ -256,6 +258,15 @@ export default function Controller() {
                 >
                   {copiedKey ? <Check size={12} color="#4ade80" /> : <Copy size={12} />}
                 </button>
+                <button
+                  type="button"
+                  style={{ background: 'none', border: 'none', color: '#C8A65D', cursor: 'pointer', padding: '0 2px', display: 'inline-flex', alignItems: 'center' }}
+                  onClick={() => setRegenModalOpen(true)}
+                  title="Regenerate Streamer Key"
+                  aria-label="Regenerate Streamer Key"
+                >
+                  <RefreshCw size={11} />
+                </button>
               </div>
               <button
                 type="button"
@@ -377,6 +388,7 @@ export default function Controller() {
 
       <ToastContainer />
       <ShareRemoteModal isOpen={shareModalOpen} onClose={() => setShareModalOpen(false)} />
+      <RegenerateKeyModal isOpen={regenModalOpen} onClose={() => setRegenModalOpen(false)} />
     </div>
   );
 }

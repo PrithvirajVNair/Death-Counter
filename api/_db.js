@@ -419,7 +419,7 @@ export async function applyAction(rawAction, value, extra = {}, channel = '', to
   if (rpcError) {
     const msg = rpcError.message || 'Counter mutation failed';
     const err = new Error(msg);
-    if (msg.includes('Unauthorized') || msg.includes('operation_id')) {
+    if (msg.includes('Unauthorized') || msg.includes('Invalid or missing operation_id')) {
       err.code = 'UNAUTHORIZED';
       err.status = 401;
     } else if (msg.includes('Permission denied')) {

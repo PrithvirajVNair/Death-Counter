@@ -37,8 +37,8 @@ export function AuthProvider({ children }) {
         clearAllStorage();
       }
 
-      // Auto-connect to local desktop app if running
-      if (session?.user) {
+      // Auto-connect to local desktop app if running locally over HTTP (avoids browser loopback CORS warning on HTTPS)
+      if (session?.user && typeof window !== "undefined" && window.location.protocol === "http:") {
         const key = getStreamerKey(session.user);
         try {
           fetch(

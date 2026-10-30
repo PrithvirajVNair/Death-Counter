@@ -99,3 +99,9 @@ create policy "Public token lookup"
   on public.streamer_remote_tokens
   for select
   using (not is_revoked and (expires_at is null or expires_at > now()));
+
+-- ==============================================================================
+-- 7. Enable Realtime Replication for instant push updates to Controller & Overlay
+-- ==============================================================================
+alter publication supabase_realtime add table public.streamer_states;
+

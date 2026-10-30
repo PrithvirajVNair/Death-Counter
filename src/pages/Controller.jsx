@@ -10,7 +10,7 @@ import CustomizationPanel from '../components/CustomizationPanel';
 import Embers from '../components/Embers';
 import ToastContainer, { showToast } from '../components/Toast';
 import { DEFAULT_PRESET_COLORS } from '../lib/defaults';
-import { loadCloudStateByKey } from '../lib/supabase';
+import { loadCloudStateByKey, supabase } from '../lib/supabase';
 import { Key, Copy, Check, LogOut, Radio, Users } from 'lucide-react';
 import '../styles/controller.css';
 import '../styles/auth.css';
@@ -137,19 +137,35 @@ export default function Controller() {
   }, [settings.preset, handleColorChange]);
 
   const hasLoadedCloudRef = React.useRef(false);
-  const prevUserRef = React.useRef(null);
+  const lastCloudStateRef = React.useRef({ deaths: null, sessionDeaths: null, allTimeDeaths: null, bossKills: null });
 
-  // When user signs in or switches accounts, load THEIR cloud data from Supabase
+  // 1. Bi-directional cloud sync: Listen for remote friend changes & pull on tab focus
   useEffect(() => {
-    if (user && streamerKey && prevUserRef.current !== user.id) {
-      prevUserRef.current = user.id;
-      hasLoadedCloudRef.current = false;
+    if (!user || !streamerKey || !supabase) return;
 
-      loadCloudStateByKey(streamerKey).then((cloudState) => {
+    const syncFromCloud = async () => {
+      try {
+        const cloudState = await loadCloudStateByKey(streamerKey);
         if (cloudState) {
-          counter.loadFullState(cloudState);
-        } else {
-          // Brand new user with no previous cloud state: start at 0
+          // If cloud has newer or different numbers, adopt them into the Controller
+          const prev = lastCloudStateRef.current;
+          const isDifferent =
+            prev.deaths !== cloudState.deaths ||
+            prev.sessionDeaths !== cloudState.sessionDeaths ||
+            prev.bossKills !== cloudState.bossKills;
+
+          if (isDifferent || !hasLoadedCloudRef.current) {
+            lastCloudStateRef.current = {
+              deaths: cloudState.deaths,
+              sessionDeaths: cloudState.sessionDeaths,
+              allTimeDeaths: cloudState.allTimeDeaths,
+              bossKills: cloudState.bossKills,
+            };
+            counter.loadFullState(cloudState);
+          }
+        } else if (!hasLoadedCloudRef.current) {
+          // New user with no records: start clean at 0
+          lastCloudStateRef.current = { deaths: 0, sessionDeaths: 0, allTimeDeaths: 0, bossKills: 0 };
           counter.loadFullState({
             deaths: 0,
             sessionDeaths: 0,
@@ -159,23 +175,85 @@ export default function Controller() {
           });
         }
         hasLoadedCloudRef.current = true;
-      });
-    }
+      } catch (err) {
+        console.warn('Could not sync controller from cloud:', err);
+      }
+    };
+
+    // Initial sync
+    syncFromCloud();
+
+    // Pull whenever streamer focuses the tab (e.g. after friend makes a change)
+    const handleFocus = () => syncFromCloud();
+    window.addEventListener('focus', handleFocus);
+
+    // Supabase Realtime: Instant push when a friend taps the remote control
+    const channel = supabase
+      .channel(`streamer_sync_${streamerKey}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'streamer_states',
+          filter: `streamer_key=eq.${streamerKey}`,
+        },
+        (payload) => {
+          const row = payload.new;
+          if (row) {
+            lastCloudStateRef.current = {
+              deaths: row.deaths,
+              sessionDeaths: row.session_deaths,
+              allTimeDeaths: row.all_time_deaths,
+              bossKills: row.boss_kills,
+            };
+            counter.loadFullState({
+              deaths: row.deaths,
+              sessionDeaths: row.session_deaths,
+              allTimeDeaths: row.all_time_deaths,
+              bossKills: row.boss_kills,
+              lastUpdated: row.last_updated,
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    // Polling safety net every 2 seconds
+    const interval = setInterval(syncFromCloud, 2000);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(interval);
+      channel.unsubscribe();
+    };
   }, [user, streamerKey, counter]);
 
-  // Sync state to Supabase cloud when stats update (ONLY after user's cloud data has been safely loaded)
+  // 2. Sync to Supabase ONLY when streamer makes local changes on the Controller
   useEffect(() => {
-    if (user && streamerKey && hasLoadedCloudRef.current) {
-      saveCloudState({
-        deaths,
-        sessionDeaths,
-        allTimeDeaths,
-        bossKills,
-        settings,
-        shortcuts,
-        lastUpdated: Date.now(),
-      });
+    if (!user || !streamerKey || !hasLoadedCloudRef.current) return;
+
+    const prev = lastCloudStateRef.current;
+    // Don't save if the state simply matches what was loaded/pushed from the cloud!
+    if (
+      prev.deaths === deaths &&
+      prev.sessionDeaths === sessionDeaths &&
+      prev.bossKills === bossKills
+    ) {
+      return;
     }
+
+    lastCloudStateRef.current = { deaths, sessionDeaths, allTimeDeaths, bossKills };
+
+    saveCloudState({
+      deaths,
+      sessionDeaths,
+      allTimeDeaths,
+      bossKills,
+      settings,
+      shortcuts,
+      lastUpdated: Date.now(),
+    });
   }, [deaths, sessionDeaths, allTimeDeaths, bossKills, settings, shortcuts, user, streamerKey, saveCloudState]);
 
   // Auth Gate: Require sign in to use counter

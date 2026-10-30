@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { validateRemoteToken, updateStreamerStateRemote, supabase } from '../lib/supabase';
+import { broadcastUpdate } from '../lib/sync';
 import { Shield, Skull, Trophy, RotateCcw, Edit3, Clock, AlertTriangle, Check, ExternalLink, Zap } from 'lucide-react';
 import Embers from '../components/Embers';
 import '../styles/remote.css';
@@ -43,10 +44,13 @@ export default function RemoteControl() {
   }, [token]);
 
   const streamerKey = tokenInfo?.streamerKey;
+  const lastActionTimeRef = useRef(0);
 
   // 2. Fetch & Poll streamer state directly from Supabase + API fallback
   const fetchState = useCallback(async () => {
     if (!streamerKey) return;
+    // Don't let polling overwrite freshly tapped actions
+    if (Date.now() - lastActionTimeRef.current < 2500) return;
 
     // 1. Direct Supabase check
     if (supabase) {
@@ -147,8 +151,19 @@ export default function RemoteControl() {
       nextBossKills = Math.max(0, extra.bossKills ?? bossKills);
     }
 
-    // 1. Direct Supabase Table Update
-    updateStreamerStateRemote(streamerKey, {
+    lastActionTimeRef.current = Date.now();
+
+    // 1. Instant tab-to-tab sync if testing on same computer
+    broadcastUpdate('deaths', {
+      deaths: nextDeaths,
+      sessionDeaths: nextSession,
+      allTimeDeaths: nextAllTime,
+      bossKills: nextBossKills,
+      triggerAnim: action === 'add' || action === 'addDeath',
+    });
+
+    // 2. Direct Supabase Table Update
+    await updateStreamerStateRemote(streamerKey, {
       deaths: nextDeaths,
       session_deaths: nextSession,
       all_time_deaths: nextAllTime,
@@ -156,7 +171,7 @@ export default function RemoteControl() {
       last_updated: Date.now(),
     });
 
-    // 2. Broadcast via API
+    // 3. Broadcast via API
     try {
       await fetch(`/api/action?key=${encodeURIComponent(streamerKey)}`, {
         method: 'POST',

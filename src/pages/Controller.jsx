@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useDeathCounter } from '../hooks/useDeathCounter';
 import { useAuth } from '../context/AuthContext';
 import AuthModal from '../components/AuthModal';
@@ -12,7 +12,7 @@ import Embers from '../components/Embers';
 import ToastContainer, { showToast } from '../components/Toast';
 import { DEFAULT_PRESET_COLORS } from '../lib/defaults';
 import { loadCloudStateByKey, supabase } from '../lib/supabase';
-import { Key, Copy, Check, LogOut, Radio, Users, Eye, EyeOff, RefreshCw } from 'lucide-react';
+import { Key, Copy, Check, LogOut, Users, Eye, EyeOff, RefreshCw } from 'lucide-react';
 import '../styles/controller.css';
 import '../styles/auth.css';
 
@@ -29,7 +29,7 @@ export default function Controller() {
     addDeath, undoDeath, resetDeaths, resetSession,
     addBossKill, undoBossKill, resetBossKills,
     setDeathCount, setBossKillCount,
-    updateSettings, resetAppearance, updateShortcuts,
+    updateSettings, resetAppearance, _updateShortcuts,
     currentBoss, bosses,
   } = counter;
 
@@ -71,7 +71,17 @@ export default function Controller() {
   }, [settings.preset, handleColorChange]);
 
   const hasLoadedCloudRef = React.useRef(false);
-  const lastCloudStateRef = React.useRef({ deaths: null, sessionDeaths: null, allTimeDeaths: null, bossKills: null });
+  const lastCloudStateRef = React.useRef({
+    deaths: null,
+    sessionDeaths: null,
+    allTimeDeaths: null,
+    bossKills: null,
+    settingsHash: null,
+    shortcutsHash: null,
+    bossesHash: null,
+    currentBoss: null,
+    revision: null,
+  });
 
   // 1. Bi-directional cloud sync: Listen for remote friend changes & pull on tab focus
   useEffect(() => {
@@ -81,12 +91,12 @@ export default function Controller() {
       try {
         const cloudState = await loadCloudStateByKey(streamerKey);
         if (cloudState) {
-          // If cloud has newer or different numbers, adopt them into the Controller
           const prev = lastCloudStateRef.current;
           const isDifferent =
             prev.deaths !== cloudState.deaths ||
             prev.sessionDeaths !== cloudState.sessionDeaths ||
-            prev.bossKills !== cloudState.bossKills;
+            prev.bossKills !== cloudState.bossKills ||
+            (cloudState.revision && prev.revision && cloudState.revision > prev.revision);
 
           if (isDifferent || !hasLoadedCloudRef.current) {
             lastCloudStateRef.current = {
@@ -94,17 +104,37 @@ export default function Controller() {
               sessionDeaths: cloudState.sessionDeaths,
               allTimeDeaths: cloudState.allTimeDeaths,
               bossKills: cloudState.bossKills,
+              settingsHash: JSON.stringify(cloudState.settings || {}),
+              shortcutsHash: JSON.stringify(cloudState.shortcuts || {}),
+              bossesHash: JSON.stringify(cloudState.bosses || {}),
+              currentBoss: cloudState.currentBoss || '',
+              revision: cloudState.revision || 1,
             };
             counter.loadFullState(cloudState);
           }
         } else if (!hasLoadedCloudRef.current) {
           // New user with no records: start clean at 0
-          lastCloudStateRef.current = { deaths: 0, sessionDeaths: 0, allTimeDeaths: 0, bossKills: 0 };
+          lastCloudStateRef.current = {
+            deaths: 0,
+            sessionDeaths: 0,
+            allTimeDeaths: 0,
+            bossKills: 0,
+            settingsHash: JSON.stringify(settings || {}),
+            shortcutsHash: JSON.stringify(shortcuts || {}),
+            bossesHash: '{}',
+            currentBoss: '',
+            revision: 1,
+          };
           counter.loadFullState({
             deaths: 0,
             sessionDeaths: 0,
             allTimeDeaths: 0,
             bossKills: 0,
+            settings,
+            shortcuts,
+            bosses: {},
+            currentBoss: '',
+            revision: 1,
             lastUpdated: Date.now(),
           });
         }
@@ -140,12 +170,22 @@ export default function Controller() {
               sessionDeaths: row.session_deaths,
               allTimeDeaths: row.all_time_deaths,
               bossKills: row.boss_kills,
+              settingsHash: JSON.stringify(row.settings || {}),
+              shortcutsHash: JSON.stringify(row.shortcuts || {}),
+              bossesHash: JSON.stringify(row.bosses || {}),
+              currentBoss: row.current_boss || '',
+              revision: row.revision || 1,
             };
             counter.loadFullState({
               deaths: row.deaths,
               sessionDeaths: row.session_deaths,
               allTimeDeaths: row.all_time_deaths,
               bossKills: row.boss_kills,
+              settings: row.settings || {},
+              shortcuts: row.shortcuts || {},
+              bosses: row.bosses || {},
+              currentBoss: row.current_boss || '',
+              revision: row.revision || 1,
               lastUpdated: row.last_updated,
             });
           }
@@ -161,23 +201,42 @@ export default function Controller() {
       clearInterval(interval);
       channel.unsubscribe();
     };
-  }, [user, streamerKey, counter]);
+  }, [user, streamerKey, counter, settings, shortcuts]);
 
   // 2. Sync to Supabase ONLY when streamer makes local changes on the Controller
   useEffect(() => {
     if (!user || !streamerKey || !hasLoadedCloudRef.current) return;
 
     const prev = lastCloudStateRef.current;
-    // Don't save if the state simply matches what was loaded/pushed from the cloud!
+    const settingsStr = JSON.stringify(settings || {});
+    const shortcutsStr = JSON.stringify(shortcuts || {});
+    const bossesStr = JSON.stringify(bosses || {});
+
+    // Don't save if the state simply matches what was loaded/pushed from the cloud
     if (
       prev.deaths === deaths &&
       prev.sessionDeaths === sessionDeaths &&
-      prev.bossKills === bossKills
+      prev.allTimeDeaths === allTimeDeaths &&
+      prev.bossKills === bossKills &&
+      prev.settingsHash === settingsStr &&
+      prev.shortcutsHash === shortcutsStr &&
+      prev.bossesHash === bossesStr &&
+      prev.currentBoss === currentBoss
     ) {
       return;
     }
 
-    lastCloudStateRef.current = { deaths, sessionDeaths, allTimeDeaths, bossKills };
+    lastCloudStateRef.current = {
+      deaths,
+      sessionDeaths,
+      allTimeDeaths,
+      bossKills,
+      settingsHash: settingsStr,
+      shortcutsHash: shortcutsStr,
+      bossesHash: bossesStr,
+      currentBoss,
+      revision: (counter.revision || 1) + 1,
+    };
 
     saveCloudState({
       deaths,
@@ -186,9 +245,12 @@ export default function Controller() {
       bossKills,
       settings,
       shortcuts,
+      bosses,
+      currentBoss,
+      revision: (counter.revision || 1) + 1,
       lastUpdated: Date.now(),
     });
-  }, [deaths, sessionDeaths, allTimeDeaths, bossKills, settings, shortcuts, user, streamerKey, saveCloudState]);
+  }, [deaths, sessionDeaths, allTimeDeaths, bossKills, settings, shortcuts, bosses, currentBoss, user, streamerKey, counter.revision, saveCloudState]);
 
   // Auth Gate: Require sign in to use counter
   if (authLoading) {

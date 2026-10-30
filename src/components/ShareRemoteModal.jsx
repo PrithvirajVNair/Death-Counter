@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Copy, Check, Clock, Shield, Trash2, ExternalLink, Link2, AlertCircle } from 'lucide-react';
+import { X, Copy, Check, Clock, Trash2, Link2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { createRemoteToken, fetchRemoteTokens, revokeRemoteToken } from '../lib/supabase';
 import '../styles/auth.css';

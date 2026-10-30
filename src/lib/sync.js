@@ -191,9 +191,9 @@ export async function fetchServerState() {
 export function onSyncMessage(callback) {
   const cleanups = [];
 
-  // ─── 1. Server-Sent Events (SSE) for OBS Studio Browser Source ───
+  // ─── 1. Server-Sent Events (SSE) for Local Vite Development ───
   let eventSource = null;
-  if (typeof EventSource !== 'undefined') {
+  if (import.meta.env.DEV && typeof EventSource !== 'undefined') {
     try {
       eventSource = new EventSource('/api/events');
 
@@ -207,10 +207,6 @@ export function onSyncMessage(callback) {
         } catch (err) {
           console.warn('[SSE] Parse error:', err);
         }
-      };
-
-      eventSource.onerror = () => {
-        // EventSource automatically attempts reconnection
       };
 
       cleanups.push(() => {
@@ -253,21 +249,30 @@ export function onSyncMessage(callback) {
   window.addEventListener('storage', storageHandler);
   cleanups.push(() => window.removeEventListener('storage', storageHandler));
 
-  // ─── 4. Periodic polling safety net ───
-  // OBS Studio Browser Source runs on /overlay and polls frequently (800ms) for instant display.
-  // The Controller page polls at 1200ms to safely sync desktop companion app hotkey actions.
+  // ─── 4. Periodic polling safety net (Recovers from network drops without hammering) ───
   const isOverlayPage = typeof window !== 'undefined' && window.location.pathname.includes('overlay');
-  const pollRate = isOverlayPage ? 800 : 1200;
+  const pollRate = isOverlayPage ? 1000 : 2500;
+  let isPolling = false;
 
   const pollInterval = setInterval(async () => {
-    const serverState = await fetchServerState();
-    if (serverState) {
-      callback({
-        id: `poll-${Date.now()}`,
-        type: 'pollSync',
-        payload: serverState,
-        timestamp: Date.now(),
-      });
+    // Suspend polling when tab is hidden to save battery & bandwidth (except OBS overlay)
+    if (typeof document !== 'undefined' && document.hidden && !isOverlayPage) {
+      return;
+    }
+    if (isPolling) return;
+    isPolling = true;
+    try {
+      const serverState = await fetchServerState();
+      if (serverState) {
+        callback({
+          id: `poll-${Date.now()}`,
+          type: 'pollSync',
+          payload: serverState,
+          timestamp: Date.now(),
+        });
+      }
+    } catch {} finally {
+      isPolling = false;
     }
   }, pollRate);
   cleanups.push(() => clearInterval(pollInterval));

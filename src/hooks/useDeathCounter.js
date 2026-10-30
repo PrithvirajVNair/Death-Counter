@@ -1,5 +1,5 @@
 // Central death counter hook — shared state, persistence, and multi-channel sync
-// Supports: Server-Sent Events (SSE for OBS Studio Browser Source), BroadcastChannel, LocalStorage, and REST API
+// Supports: Supabase Realtime, BroadcastChannel, LocalStorage, and REST API
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { saveToStorage, loadFromStorage } from '../lib/storage';
@@ -11,6 +11,7 @@ export function useDeathCounter() {
   const [deaths, setDeaths] = useState(() => loadFromStorage('deaths', 0));
   const [sessionDeaths, setSessionDeaths] = useState(() => loadFromStorage('sessionDeaths', 0));
   const [allTimeDeaths, setAllTimeDeaths] = useState(() => loadFromStorage('allTimeDeaths', 0));
+  const [revision, setRevision] = useState(() => loadFromStorage('revision', 1));
   const [settings, setSettings] = useState(() => {
     const saved = loadFromStorage('settings', null);
     return saved ? { ...DEFAULT_SETTINGS, ...saved } : { ...DEFAULT_SETTINGS };
@@ -42,6 +43,7 @@ export function useDeathCounter() {
     bosses,
     currentBoss,
     history,
+    revision,
     lastUpdated,
   });
 
@@ -56,6 +58,7 @@ export function useDeathCounter() {
       bosses,
       currentBoss,
       history,
+      revision,
       lastUpdated,
     };
   });
@@ -100,6 +103,7 @@ export function useDeathCounter() {
           sessionDeaths: localSession,
           allTimeDeaths: localAllTime,
           bossKills: localBossKills,
+          revision: (serverState.revision || 1) + 1,
           lastUpdated: localLastUpdated || Date.now(),
         });
         return;
@@ -120,6 +124,10 @@ export function useDeathCounter() {
       if (serverState.bossKills !== undefined) {
         setBossKills(serverState.bossKills);
         saveToStorage('bossKills', serverState.bossKills);
+      }
+      if (serverState.revision !== undefined) {
+        setRevision(serverState.revision);
+        saveToStorage('revision', serverState.revision);
       }
       if (serverState.lastUpdated) {
         setLastUpdated(serverState.lastUpdated);
@@ -154,7 +162,7 @@ export function useDeathCounter() {
     });
   }, []);
 
-  // ─── Sync listener (SSE, BroadcastChannel, Storage, Polling) ───
+  // ─── Sync listener (BroadcastChannel, Storage, Realtime, Polling) ───
   useEffect(() => {
     const cleanup = onSyncMessage((msg) => {
       if (!msg || !msg.payload) return;
@@ -168,6 +176,10 @@ export function useDeathCounter() {
           if (p.bossKills !== undefined) {
             setBossKills(p.bossKills);
             saveToStorage('bossKills', p.bossKills);
+          }
+          if (p.revision !== undefined) {
+            setRevision(p.revision);
+            saveToStorage('revision', p.revision);
           }
           if (p.history) setHistory(p.history);
           saveToStorage('deaths', p.deaths);
@@ -183,6 +195,10 @@ export function useDeathCounter() {
           const p = msg.payload;
           setBossKills(p.bossKills);
           saveToStorage('bossKills', p.bossKills);
+          if (p.revision !== undefined) {
+            setRevision(p.revision);
+            saveToStorage('revision', p.revision);
+          }
           if (p.triggerAnim) {
             triggerBossAnimRef.current();
           }
@@ -233,15 +249,24 @@ export function useDeathCounter() {
           const isOverlay = typeof window !== 'undefined' && window.location.pathname.includes('overlay');
           const timeSinceLocalAction = Date.now() - lastLocalActionTimeRef.current;
 
-          // On the controller, if the user recently performed a local action (within 2.5 seconds),
-          // reject background poll to prevent accidental decrementing/rubber-banding
+          // On controller: reject background poll if user recently took a local action
           if (!isOverlay && timeSinceLocalAction < 2500 && msg.type === 'pollSync') {
             return;
           }
 
-          // If incoming update has an older timestamp than our current local state, do not roll back!
-          if (p.lastUpdated && stateRef.current.lastUpdated && p.lastUpdated < stateRef.current.lastUpdated) {
+          // Authoritative revision check: ignore older revisions
+          if (p.revision && stateRef.current.revision && p.revision < stateRef.current.revision) {
             return;
+          }
+
+          // Fallback timestamp check
+          if (!p.revision && p.lastUpdated && stateRef.current.lastUpdated && p.lastUpdated < stateRef.current.lastUpdated) {
+            return;
+          }
+
+          if (p.revision !== undefined) {
+            setRevision(p.revision);
+            saveToStorage('revision', p.revision);
           }
 
           if (p.lastUpdated) {
@@ -317,16 +342,19 @@ export function useDeathCounter() {
     const nextDeaths = cur.deaths + 1;
     const nextSession = cur.sessionDeaths + 1;
     const nextAllTime = cur.allTimeDeaths + 1;
+    const nextRevision = (cur.revision || 1) + 1;
     const nextHistory = [...cur.history.slice(-99), { action: 'add', timestamp: Date.now(), value: nextDeaths }];
 
     setDeaths(nextDeaths);
     setSessionDeaths(nextSession);
     setAllTimeDeaths(nextAllTime);
+    setRevision(nextRevision);
     setHistory(nextHistory);
 
     saveToStorage('deaths', nextDeaths);
     saveToStorage('sessionDeaths', nextSession);
     saveToStorage('allTimeDeaths', nextAllTime);
+    saveToStorage('revision', nextRevision);
     saveToStorage('history', nextHistory);
     saveToStorage('lastUpdated', Date.now());
 
@@ -334,6 +362,7 @@ export function useDeathCounter() {
       deaths: nextDeaths,
       sessionDeaths: nextSession,
       allTimeDeaths: nextAllTime,
+      revision: nextRevision,
       history: nextHistory,
       triggerAnim: true,
     });
@@ -347,14 +376,17 @@ export function useDeathCounter() {
     if (cur.deaths <= 0) return;
     const nextDeaths = cur.deaths - 1;
     const nextSession = Math.max(0, cur.sessionDeaths - 1);
+    const nextRevision = (cur.revision || 1) + 1;
     const nextHistory = [...cur.history.slice(-99), { action: 'undo', timestamp: Date.now(), value: nextDeaths }];
 
     setDeaths(nextDeaths);
     setSessionDeaths(nextSession);
+    setRevision(nextRevision);
     setHistory(nextHistory);
 
     saveToStorage('deaths', nextDeaths);
     saveToStorage('sessionDeaths', nextSession);
+    saveToStorage('revision', nextRevision);
     saveToStorage('history', nextHistory);
     saveToStorage('lastUpdated', Date.now());
 
@@ -362,6 +394,7 @@ export function useDeathCounter() {
       deaths: nextDeaths,
       sessionDeaths: nextSession,
       allTimeDeaths: cur.allTimeDeaths,
+      revision: nextRevision,
       history: nextHistory,
       triggerAnim: false,
     });
@@ -370,18 +403,23 @@ export function useDeathCounter() {
   const resetDeaths = useCallback(() => {
     lastLocalActionTimeRef.current = Date.now();
     const cur = stateRef.current;
+    const nextRevision = (cur.revision || 1) + 1;
+
     setDeaths(0);
     setSessionDeaths(0);
+    setRevision(nextRevision);
     setHistory([]);
 
     saveToStorage('deaths', 0);
     saveToStorage('sessionDeaths', 0);
+    saveToStorage('revision', nextRevision);
     saveToStorage('history', []);
 
     broadcastUpdate('reset', {
       deaths: 0,
       sessionDeaths: 0,
       allTimeDeaths: cur.allTimeDeaths,
+      revision: nextRevision,
       history: [],
       triggerAnim: false,
     });
@@ -390,18 +428,23 @@ export function useDeathCounter() {
   const resetSession = useCallback(() => {
     lastLocalActionTimeRef.current = Date.now();
     const cur = stateRef.current;
+    const nextRevision = (cur.revision || 1) + 1;
+
     setDeaths(0);
     setSessionDeaths(0);
+    setRevision(nextRevision);
     setHistory([]);
 
     saveToStorage('deaths', 0);
     saveToStorage('sessionDeaths', 0);
+    saveToStorage('revision', nextRevision);
     saveToStorage('history', []);
 
     broadcastUpdate('deaths', {
       deaths: 0,
       sessionDeaths: 0,
       allTimeDeaths: cur.allTimeDeaths,
+      revision: nextRevision,
       history: [],
       triggerAnim: false,
     });
@@ -493,13 +536,17 @@ export function useDeathCounter() {
     lastLocalActionTimeRef.current = Date.now();
     const cur = stateRef.current;
     const nextKills = (cur.bossKills || 0) + 1;
+    const nextRevision = (cur.revision || 1) + 1;
     setBossKills(nextKills);
+    setRevision(nextRevision);
     saveToStorage('bossKills', nextKills);
+    saveToStorage('revision', nextRevision);
 
     broadcastUpdate('bossKills', {
       bossKills: nextKills,
       deaths: cur.deaths,
       currentBoss: cur.currentBoss,
+      revision: nextRevision,
       triggerAnim: true,
     });
 
@@ -511,13 +558,17 @@ export function useDeathCounter() {
     const cur = stateRef.current;
     if (!cur.bossKills || cur.bossKills <= 0) return;
     const nextKills = cur.bossKills - 1;
+    const nextRevision = (cur.revision || 1) + 1;
     setBossKills(nextKills);
+    setRevision(nextRevision);
     saveToStorage('bossKills', nextKills);
+    saveToStorage('revision', nextRevision);
 
     broadcastUpdate('bossKills', {
       bossKills: nextKills,
       deaths: cur.deaths,
       currentBoss: cur.currentBoss,
+      revision: nextRevision,
       triggerAnim: false,
     });
   }, []);
@@ -525,13 +576,17 @@ export function useDeathCounter() {
   const resetBossKills = useCallback(() => {
     lastLocalActionTimeRef.current = Date.now();
     const cur = stateRef.current;
+    const nextRevision = (cur.revision || 1) + 1;
     setBossKills(0);
+    setRevision(nextRevision);
     saveToStorage('bossKills', 0);
+    saveToStorage('revision', nextRevision);
 
     broadcastUpdate('bossKills', {
       bossKills: 0,
       deaths: cur.deaths,
       currentBoss: cur.currentBoss,
+      revision: nextRevision,
       triggerAnim: false,
     });
   }, []);
@@ -543,16 +598,19 @@ export function useDeathCounter() {
     const diff = nextDeaths - cur.deaths;
     const nextSession = Math.max(0, cur.sessionDeaths + diff);
     const nextAllTime = Math.max(0, cur.allTimeDeaths + Math.max(0, diff));
+    const nextRevision = (cur.revision || 1) + 1;
     const nextHistory = [...cur.history.slice(-99), { action: 'set', timestamp: Date.now(), value: nextDeaths }];
 
     setDeaths(nextDeaths);
     setSessionDeaths(nextSession);
     setAllTimeDeaths(nextAllTime);
+    setRevision(nextRevision);
     setHistory(nextHistory);
 
     saveToStorage('deaths', nextDeaths);
     saveToStorage('sessionDeaths', nextSession);
     saveToStorage('allTimeDeaths', nextAllTime);
+    saveToStorage('revision', nextRevision);
     saveToStorage('history', nextHistory);
     saveToStorage('lastUpdated', Date.now());
 
@@ -560,6 +618,7 @@ export function useDeathCounter() {
       deaths: nextDeaths,
       sessionDeaths: nextSession,
       allTimeDeaths: nextAllTime,
+      revision: nextRevision,
       history: nextHistory,
       triggerAnim: true,
     });
@@ -570,14 +629,18 @@ export function useDeathCounter() {
   const setBossKillCount = useCallback((customValue) => {
     const nextKills = Math.max(0, parseInt(customValue, 10) || 0);
     const cur = stateRef.current;
+    const nextRevision = (cur.revision || 1) + 1;
 
     setBossKills(nextKills);
+    setRevision(nextRevision);
     saveToStorage('bossKills', nextKills);
+    saveToStorage('revision', nextRevision);
 
     broadcastUpdate('bossKills', {
       bossKills: nextKills,
       deaths: cur.deaths,
       currentBoss: cur.currentBoss,
+      revision: nextRevision,
       triggerAnim: true,
     });
 
@@ -594,6 +657,7 @@ export function useDeathCounter() {
     bosses,
     currentBoss,
     history,
+    revision,
     deathAnim,
     bossSlainAnim,
     loadFullState: (s) => {
@@ -613,6 +677,10 @@ export function useDeathCounter() {
       if (s.bossKills !== undefined) {
         setBossKills(s.bossKills);
         saveToStorage('bossKills', s.bossKills);
+      }
+      if (s.revision !== undefined) {
+        setRevision(s.revision);
+        saveToStorage('revision', s.revision);
       }
       if (s.settings) {
         setSettings((prev) => ({ ...prev, ...s.settings }));

@@ -1,11 +1,11 @@
-import fs from 'fs';
-import path from 'path';
+import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL =
   process.env.SUPABASE_URL ||
   process.env.VITE_SUPABASE_URL ||
   "https://sexlwhkcropcrdewarmr.supabase.co";
+
 const SUPABASE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.SUPABASE_ANON_KEY ||
@@ -19,12 +19,12 @@ export function getSupabase() {
       supabaseClient = createClient(SUPABASE_URL, SUPABASE_KEY, {
         auth: { persistSession: false },
       });
-    } catch {}
+    } catch (e) {
+      console.warn('Failed to initialize Supabase client in API:', e.message);
+    }
   }
   return supabaseClient;
 }
-
-const TMP_FILE_PATH = path.join('/tmp', 'death-counter-data.json');
 
 const DEFAULT_STATE = {
   deaths: 0,
@@ -61,204 +61,299 @@ const DEFAULT_STATE = {
   bosses: {},
   currentBoss: '',
   history: [],
+  revision: 1,
   lastUpdated: 0,
 };
 
-function readDiskCache() {
-  try {
-    if (fs.existsSync(TMP_FILE_PATH)) {
-      const raw = fs.readFileSync(TMP_FILE_PATH, 'utf-8');
-      return JSON.parse(raw);
-    }
-  } catch {}
-  return null;
-}
-
-function writeDiskCache(state) {
-  try {
-    fs.writeFileSync(TMP_FILE_PATH, JSON.stringify(state, null, 2), 'utf-8');
-  } catch {}
-}
-
+// Fallback in-memory cache for offline/dev environments
 const channelMap = globalThis.__DEATH_COUNTER_CHANNELS__ || (globalThis.__DEATH_COUNTER_CHANNELS__ = new Map());
 
-export function getState(channel = '') {
+export function hashToken(token) {
+  if (!token) return '';
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+/**
+ * Fetch authoritative state for a streamer key.
+ * Always prefers Supabase PostgreSQL as the true persistent source of truth.
+ */
+export async function getState(channel = '') {
   if (!channel) {
-    // If no channel is specified, return clean isolated default state so strangers never see each other's data!
     return { ...DEFAULT_STATE };
   }
+
+  const sb = getSupabase();
+  if (sb) {
+    try {
+      const { data, error } = await sb
+        .from('streamer_states')
+        .select('streamer_key, deaths, session_deaths, all_time_deaths, boss_kills, settings, shortcuts, bosses, current_boss, revision, last_updated')
+        .eq('streamer_key', channel)
+        .maybeSingle();
+
+      if (!error && data) {
+        const state = {
+          deaths: Math.max(0, data.deaths ?? 0),
+          sessionDeaths: Math.max(0, data.session_deaths ?? 0),
+          allTimeDeaths: Math.max(0, data.all_time_deaths ?? 0),
+          bossKills: Math.max(0, data.boss_kills ?? 0),
+          settings: data.settings || DEFAULT_STATE.settings,
+          shortcuts: data.shortcuts || DEFAULT_STATE.shortcuts,
+          bosses: data.bosses || {},
+          currentBoss: data.current_boss || '',
+          revision: data.revision ?? 1,
+          lastUpdated: data.last_updated ?? 0,
+        };
+        channelMap.set(channel, state);
+        return state;
+      }
+    } catch (err) {
+      console.warn('[DB] Supabase getState error:', err.message);
+    }
+  }
+
   if (!channelMap.has(channel)) {
     channelMap.set(channel, { ...DEFAULT_STATE });
   }
   return channelMap.get(channel);
 }
 
-function saveToSupabaseAsync(channel, state) {
-  if (!channel) return;
-  const sb = getSupabase();
-  if (!sb) return;
-  try {
-    sb.from('streamer_states').update({
-      deaths: state.deaths ?? 0,
-      session_deaths: state.sessionDeaths ?? 0,
-      all_time_deaths: state.allTimeDeaths ?? 0,
-      boss_kills: state.bossKills ?? 0,
-      settings: state.settings || {},
-      shortcuts: state.shortcuts || {},
-      last_updated: state.lastUpdated || Date.now(),
-      updated_at: new Date().toISOString(),
-    }).eq('streamer_key', channel).then(({ error }) => {
-      if (error) console.error('Supabase update streamer_states error:', error);
-    }).catch((err) => {
-      console.error('Supabase update catch:', err);
-    });
-  } catch (err) {
-    console.error('Failed to trigger update in Supabase:', err);
-  }
-}
-
-export function updateState(partial = {}, channel = '') {
-  if (!channel) {
-    return { ...DEFAULT_STATE, ...partial };
-  }
-  const current = getState(channel);
-  const updateTimestamp = partial.lastUpdated || Date.now();
-
-  // If incoming state is strictly older than current server state, do not roll back!
-  if (partial.lastUpdated && current.lastUpdated && partial.lastUpdated < current.lastUpdated) {
-    return current;
-  }
-
-  const next = {
-    ...current,
-    ...partial,
-    settings: {
-      ...current.settings,
-      ...(partial.settings || {}),
-    },
-    shortcuts: {
-      ...current.shortcuts,
-      ...(partial.shortcuts || {}),
-    },
-    bosses: {
-      ...current.bosses,
-      ...(partial.bosses || {}),
-    },
-    lastUpdated: Math.max(updateTimestamp, current.lastUpdated || 0),
+/**
+ * Public overlay state projection (Never exposes user_id, email, or secrets)
+ */
+export async function getPublicOverlayState(channel = '') {
+  const full = await getState(channel);
+  return {
+    deaths: full.deaths,
+    sessionDeaths: full.sessionDeaths,
+    allTimeDeaths: full.allTimeDeaths,
+    bossKills: full.bossKills,
+    settings: full.settings,
+    shortcuts: full.shortcuts,
+    bosses: full.bosses,
+    currentBoss: full.currentBoss,
+    revision: full.revision || 1,
+    lastUpdated: full.lastUpdated || 0,
   };
-
-  channelMap.set(channel, next);
-  saveToSupabaseAsync(channel, next);
-  return next;
 }
 
-export function applyAction(rawAction, value, extra = {}, channel = '') {
-  if (!channel) {
-    return { state: { ...DEFAULT_STATE }, normAction: rawAction };
+/**
+ * Validate token and return authorized streamer key.
+ * Strictly verifies unexpired and non-revoked status in Supabase.
+ */
+export async function getStreamerKeyFromToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const cleanToken = token.trim();
+  if (cleanToken.length < 10) return null;
+
+  const client = getSupabase();
+  if (!client) {
+    // In offline development fallback: check token in local cache
+    for (const [key] of channelMap.entries()) {
+      if (cleanToken.includes(key)) return key;
+    }
+    return null;
   }
-  const state = getState(channel);
-  const now = extra.lastUpdated || Date.now();
+
+  try {
+    const tokenHash = hashToken(cleanToken);
+
+    const { data, error } = await client
+      .from('streamer_remote_tokens')
+      .select('streamer_key, is_revoked, expires_at')
+      .or(`token.eq.${cleanToken},token_hash.eq.${tokenHash}`)
+      .maybeSingle();
+
+    if (!error && data && !data.is_revoked) {
+      if (!data.expires_at || new Date(data.expires_at).getTime() > Date.now()) {
+        return data.streamer_key;
+      }
+    }
+  } catch (err) {
+    console.warn('[DB] Token lookup error:', err.message);
+  }
+
+  return null;
+}
+
+/**
+ * Apply atomic counter mutation to authoritative state.
+ */
+export async function applyAction(rawAction, value, extra = {}, channel = '', token = null, operationId = null) {
+  if (!channel) {
+    return { state: { ...DEFAULT_STATE }, normAction: rawAction, revision: 1 };
+  }
 
   const normAction =
     rawAction === 'add' || rawAction === 'addDeath' ? 'add'
     : rawAction === 'undo' || rawAction === 'undoDeath' ? 'undo'
     : rawAction === 'addBossKill' || rawAction === 'bossSlain' ? 'addBossKill'
     : rawAction === 'undoBossKill' ? 'undoBossKill'
-    : rawAction === 'set' || rawAction === 'setDeath' ? 'setDeath'
-    : rawAction === 'setBossKill' ? 'setBossKill'
-    : rawAction;
+    : rawAction === 'set' || rawAction === 'setDeath' || rawAction === 'setCount' ? 'setDeath'
+    : rawAction === 'setBossKill' || rawAction === 'setBossCount' ? 'setBossKill'
+    : rawAction === 'resetSession' || rawAction === 'reset' ? 'resetSession'
+    : rawAction === 'resetAll' ? 'resetAll'
+    : null;
 
-  // If the caller provided authoritative counts with a newer or equal timestamp:
-  if (extra.deaths !== undefined && (!state.lastUpdated || now >= state.lastUpdated)) {
-    state.deaths = Math.max(0, parseInt(extra.deaths, 10) || 0);
-    if (extra.sessionDeaths !== undefined) {
-      state.sessionDeaths = Math.max(0, parseInt(extra.sessionDeaths, 10) || 0);
-    }
-    if (extra.allTimeDeaths !== undefined) {
-      state.allTimeDeaths = Math.max(0, parseInt(extra.allTimeDeaths, 10) || 0);
-    }
-    if (extra.bossKills !== undefined) {
-      state.bossKills = Math.max(0, parseInt(extra.bossKills, 10) || 0);
-    }
-    state.history = [
-      ...(state.history || []).slice(-99),
-      { action: normAction, timestamp: now, value: state.deaths },
-    ];
-  } else {
-    // Standard relative action mutation
-    if (normAction === 'add') {
-      state.deaths += 1;
-      state.sessionDeaths += 1;
-      state.allTimeDeaths += 1;
-      state.history = [
-        ...(state.history || []).slice(-99),
-        { action: 'add', timestamp: now, value: state.deaths },
-      ];
-    } else if (normAction === 'undo') {
-      if (state.deaths > 0) state.deaths -= 1;
-      if (state.sessionDeaths > 0) state.sessionDeaths -= 1;
-      state.history = [
-        ...(state.history || []).slice(-99),
-        { action: 'undo', timestamp: now, value: state.deaths },
-      ];
-    } else if (normAction === 'addBossKill') {
-      state.bossKills += 1;
-    } else if (normAction === 'undoBossKill') {
-      if (state.bossKills > 0) state.bossKills -= 1;
-    } else if (normAction === 'setDeath') {
-      const num = Math.max(0, parseInt(value, 10) || 0);
-      state.deaths = num;
-      state.sessionDeaths = num;
-    } else if (normAction === 'setBossKill') {
-      const num = Math.max(0, parseInt(value, 10) || 0);
-      state.bossKills = num;
-    }
+  if (!normAction) {
+    throw new Error(`Invalid counter action: ${rawAction}`);
   }
 
-  state.lastUpdated = Math.max(now, state.lastUpdated || 0);
-  channelMap.set(channel, state);
-  saveToSupabaseAsync(channel, state);
+  const intVal = Math.max(0, parseInt(value !== undefined ? value : (extra.value || 0), 10) || 0);
+  const now = extra.lastUpdated || Date.now();
+  const sb = getSupabase();
 
-  return { state, normAction };
-}
-
-export function resetState(target = 'session', channel = '') {
-  if (!channel) return { ...DEFAULT_STATE };
-  const state = getState(channel);
-  state.deaths = 0;
-  state.sessionDeaths = 0;
-  state.history = [];
-
-  if (target === 'all') {
-    state.allTimeDeaths = 0;
-    state.bossKills = 0;
-    state.bosses = {};
-    state.currentBoss = '';
-  }
-
-  state.lastUpdated = Date.now();
-  channelMap.set(channel, state);
-  saveToSupabaseAsync(channel, state);
-  return state;
-}
-
-export async function getStreamerKeyFromToken(token) {
-  if (!token) return null;
-  const client = getSupabase();
-  if (client) {
+  // 1. Try atomic PostgreSQL RPC function if Supabase is connected
+  if (sb) {
     try {
-      const { data, error } = await client
-        .from('streamer_remote_tokens')
-        .select('streamer_key, is_revoked, expires_at')
-        .eq('token', token)
-        .maybeSingle();
+      const { data: rpcResult, error: rpcError } = await sb.rpc('mutate_counter', {
+        p_streamer_key: channel,
+        p_action: normAction,
+        p_value: intVal,
+        p_operation_id: operationId || extra.operationId || null,
+        p_token: token || null,
+      });
 
-      if (!error && data && !data.is_revoked) {
-        if (!data.expires_at || new Date(data.expires_at).getTime() > Date.now()) {
-          return data.streamer_key;
-        }
+      if (!rpcError && rpcResult && rpcResult.success) {
+        const nextState = {
+          deaths: rpcResult.deaths,
+          sessionDeaths: rpcResult.sessionDeaths,
+          allTimeDeaths: rpcResult.allTimeDeaths,
+          bossKills: rpcResult.bossKills,
+          revision: rpcResult.revision,
+          lastUpdated: rpcResult.lastUpdated,
+        };
+        channelMap.set(channel, { ...(channelMap.get(channel) || DEFAULT_STATE), ...nextState });
+        return {
+          state: nextState,
+          normAction,
+          revision: rpcResult.revision,
+          deduped: Boolean(rpcResult.deduped),
+        };
       }
-    } catch {}
+    } catch (err) {
+      console.warn('[DB] RPC mutate_counter fallback:', err.message);
+    }
   }
-  return null;
+
+  // 2. Direct database update or offline fallback
+  const current = await getState(channel);
+  const next = { ...current };
+
+  if (normAction === 'add') {
+    next.deaths += 1;
+    next.sessionDeaths += 1;
+    next.allTimeDeaths += 1;
+  } else if (normAction === 'undo') {
+    next.deaths = Math.max(0, next.deaths - 1);
+    next.sessionDeaths = Math.max(0, next.sessionDeaths - 1);
+  } else if (normAction === 'addBossKill') {
+    next.bossKills = Math.max(0, (next.bossKills || 0) + 1);
+  } else if (normAction === 'undoBossKill') {
+    next.bossKills = Math.max(0, (next.bossKills || 0) - 1);
+  } else if (normAction === 'setDeath') {
+    const diff = intVal - next.deaths;
+    next.deaths = intVal;
+    next.sessionDeaths = Math.max(0, next.sessionDeaths + diff);
+    next.allTimeDeaths = Math.max(0, next.allTimeDeaths + Math.max(0, diff));
+  } else if (normAction === 'setBossKill') {
+    next.bossKills = intVal;
+  } else if (normAction === 'resetSession') {
+    next.deaths = 0;
+    next.sessionDeaths = 0;
+  } else if (normAction === 'resetAll') {
+    next.deaths = 0;
+    next.sessionDeaths = 0;
+    next.allTimeDeaths = 0;
+    next.bossKills = 0;
+  }
+
+  next.revision = (current.revision || 1) + 1;
+  next.lastUpdated = Math.max(now, Date.now());
+
+  channelMap.set(channel, next);
+
+  if (sb) {
+    try {
+      await sb
+        .from('streamer_states')
+        .update({
+          deaths: next.deaths,
+          session_deaths: next.sessionDeaths,
+          all_time_deaths: next.allTimeDeaths,
+          boss_kills: next.bossKills,
+          revision: next.revision,
+          last_updated: next.lastUpdated,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('streamer_key', channel);
+    } catch (err) {
+      console.error('[DB] Fallback Supabase update failed:', err);
+    }
+  }
+
+  return { state: next, normAction, revision: next.revision, deduped: false };
+}
+
+/**
+ * Update full streamer state (Settings, shortcuts, custom tallies).
+ * Carefully preserves boss histories and custom configurations.
+ */
+export async function updateState(partial = {}, channel = '') {
+  if (!channel) {
+    return { ...DEFAULT_STATE, ...partial };
+  }
+
+  const current = await getState(channel);
+  const next = {
+    ...current,
+    settings: partial.settings ? { ...current.settings, ...partial.settings } : current.settings,
+    shortcuts: partial.shortcuts ? { ...current.shortcuts, ...partial.shortcuts } : current.shortcuts,
+    bosses: partial.bosses !== undefined ? partial.bosses : current.bosses,
+    currentBoss: partial.currentBoss !== undefined ? partial.currentBoss : current.currentBoss,
+    revision: (current.revision || 1) + 1,
+    lastUpdated: Math.max(partial.lastUpdated || Date.now(), current.lastUpdated || 0),
+  };
+
+  if (partial.deaths !== undefined) next.deaths = Math.max(0, parseInt(partial.deaths, 10) || 0);
+  if (partial.sessionDeaths !== undefined) next.sessionDeaths = Math.max(0, parseInt(partial.sessionDeaths, 10) || 0);
+  if (partial.allTimeDeaths !== undefined) next.allTimeDeaths = Math.max(0, parseInt(partial.allTimeDeaths, 10) || 0);
+  if (partial.bossKills !== undefined) next.bossKills = Math.max(0, parseInt(partial.bossKills, 10) || 0);
+
+  channelMap.set(channel, next);
+
+  const sb = getSupabase();
+  if (sb) {
+    try {
+      await sb
+        .from('streamer_states')
+        .update({
+          deaths: next.deaths,
+          session_deaths: next.sessionDeaths,
+          all_time_deaths: next.allTimeDeaths,
+          boss_kills: next.bossKills,
+          settings: next.settings,
+          shortcuts: next.shortcuts,
+          bosses: next.bosses,
+          current_boss: next.currentBoss,
+          revision: next.revision,
+          last_updated: next.lastUpdated,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('streamer_key', channel);
+    } catch (err) {
+      console.error('[DB] Update state failed:', err.message);
+    }
+  }
+
+  return next;
+}
+
+/**
+ * Reset counter state (Session or All-Time).
+ */
+export async function resetState(target = 'session', channel = '', token = null) {
+  const action = target === 'all' ? 'resetAll' : 'resetSession';
+  const result = await applyAction(action, 0, {}, channel, token);
+  return result.state;
 }

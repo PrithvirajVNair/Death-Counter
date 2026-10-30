@@ -23,7 +23,7 @@ export default function Overlay() {
       try {
         const { data, error } = await supabase
           .from('streamer_states')
-          .select('*')
+          .select('streamer_key, deaths, session_deaths, all_time_deaths, boss_kills, settings, shortcuts, bosses, current_boss, revision, last_updated')
           .eq('streamer_key', effectiveKey)
           .maybeSingle();
 
@@ -37,6 +37,7 @@ export default function Overlay() {
             shortcuts: data.shortcuts || {},
             bosses: data.bosses || {},
             currentBoss: data.current_boss || '',
+            revision: data.revision || 1,
             lastUpdated: data.last_updated ?? 0,
           });
         }
@@ -69,6 +70,7 @@ export default function Overlay() {
               shortcuts: row.shortcuts || {},
               bosses: row.bosses || {},
               currentBoss: row.current_boss || '',
+              revision: row.revision || 1,
               lastUpdated: row.last_updated ?? 0,
             });
           }

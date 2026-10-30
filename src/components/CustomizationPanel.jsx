@@ -7,8 +7,8 @@ import { showToast } from './Toast';
 import { exportAllSettings, importSettings, clearAllStorage } from '../lib/storage';
 
 export default function CustomizationPanel({
-  settings,
-  onUpdateSettings,
+  _settings,
+  _onUpdateSettings,
   onResetAppearance,
   onResetSession,
 }) {
@@ -230,6 +230,10 @@ export default function CustomizationPanel({
             <button className="btn btn--secondary btn--full" onClick={onResetSession}>
               <RotateCcw size={14} />
               Reset Session (Counter → 0)
+            </button>
+            <button className="btn btn--secondary btn--full" onClick={onResetAppearance}>
+              <RotateCcw size={14} />
+              Reset Appearance (Defaults)
             </button>
             <button className="btn btn--secondary btn--full" onClick={handleExport}>
               <Download size={14} />

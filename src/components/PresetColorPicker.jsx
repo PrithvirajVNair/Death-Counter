@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Palette, RotateCcw, Check } from 'lucide-react';
-import { SOULS_PALETTE, PRESET_LIST, DEFAULT_PRESET_COLORS } from '../lib/defaults';
+import { SOULS_PALETTE, PRESET_LIST } from '../lib/defaults';
 
 export default function PresetColorPicker({
   currentPreset = 'classic-rune',

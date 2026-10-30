@@ -8,6 +8,7 @@
     "hotkeys": "powershell -ExecutionPolicy Bypass -File ./scripts/start-hotkeys.ps1",
     "build": "vite build",
     "lint": "oxlint",
+    "test": "node --test tests/*.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

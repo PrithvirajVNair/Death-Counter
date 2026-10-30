@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
-import { validateRemoteToken, updateStreamerStateRemote, supabase } from '../lib/supabase';
+import { validateRemoteToken, supabase } from '../lib/supabase';
 import { broadcastUpdate } from '../lib/sync';
-import { Shield, Skull, Trophy, RotateCcw, Edit3, Clock, AlertTriangle, Check, ExternalLink, Zap } from 'lucide-react';
+import { Skull, Trophy, RotateCcw, Edit3, Clock, AlertTriangle, Zap } from 'lucide-react';
 import Embers from '../components/Embers';
 import '../styles/remote.css';
 
@@ -10,9 +10,9 @@ export default function RemoteControl() {
   const [searchParams] = useSearchParams();
   const token = searchParams.get('token');
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(token));
   const [tokenInfo, setTokenInfo] = useState(null);
-  const [errorReason, setErrorReason] = useState(null);
+  const [errorReason, setErrorReason] = useState(!token ? 'missing' : null);
 
   // Counter state for the streamer
   const [deaths, setDeaths] = useState(0);
@@ -27,11 +27,7 @@ export default function RemoteControl() {
 
   // 1. Validate token
   useEffect(() => {
-    if (!token) {
-      setLoading(false);
-      setErrorReason('missing');
-      return;
-    }
+    if (!token) return;
 
     validateRemoteToken(token).then((result) => {
       setLoading(false);
@@ -88,9 +84,14 @@ export default function RemoteControl() {
 
   useEffect(() => {
     if (!streamerKey) return;
-    fetchState();
+    const initialTimer = setTimeout(() => {
+      fetchState();
+    }, 0);
     const interval = setInterval(fetchState, 1500);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(interval);
+    };
   }, [streamerKey, fetchState]);
 
   // Haptic feedback & quick toast
@@ -107,9 +108,9 @@ export default function RemoteControl() {
     setTimeout(() => setToastMsg(''), 2200);
   };
 
-  // Action Dispatcher: updates both Supabase table and backend API
+  // Action Dispatcher: updates local state synchronously and dispatches to backend API with token
   const sendAction = async (action, extra = {}) => {
-    if (!streamerKey) return;
+    if (!streamerKey || !token) return;
     triggerHaptic([30]);
 
     let nextDeaths = deaths;
@@ -143,12 +144,27 @@ export default function RemoteControl() {
       nextBossKills = Math.max(0, bossKills - 1);
       setBossKills(nextBossKills);
       showToast('Boss Slain Undone!');
-    } else if (action === 'setCount') {
-      nextDeaths = Math.max(0, extra.deaths ?? deaths);
-      nextSession = Math.max(0, extra.sessionDeaths ?? sessionDeaths);
-      nextAllTime = Math.max(0, extra.allTimeDeaths ?? allTimeDeaths);
-    } else if (action === 'setBossCount') {
-      nextBossKills = Math.max(0, extra.bossKills ?? bossKills);
+    } else if (action === 'setCount' || action === 'setDeath') {
+      const val = Math.max(0, parseInt(extra.value !== undefined ? extra.value : extra.deaths, 10) || 0);
+      const diff = val - deaths;
+      nextDeaths = val;
+      nextSession = Math.max(0, sessionDeaths + diff);
+      nextAllTime = Math.max(0, allTimeDeaths + Math.max(0, diff));
+      setDeaths(nextDeaths);
+      setSessionDeaths(nextSession);
+      setAllTimeDeaths(nextAllTime);
+      showToast(`Deaths set to ${val}`);
+    } else if (action === 'setBossCount' || action === 'setBossKill') {
+      const val = Math.max(0, parseInt(extra.value !== undefined ? extra.value : extra.bossKills, 10) || 0);
+      nextBossKills = val;
+      setBossKills(nextBossKills);
+      showToast(`Bosses set to ${val}`);
+    } else if (action === 'reset' || action === 'resetSession') {
+      nextDeaths = 0;
+      nextSession = 0;
+      setDeaths(0);
+      setSessionDeaths(0);
+      showToast('Session Reset!');
     }
 
     lastActionTimeRef.current = Date.now();
@@ -162,32 +178,39 @@ export default function RemoteControl() {
       triggerAnim: action === 'add' || action === 'addDeath',
     });
 
-    // 2. Direct Supabase Table Update
-    await updateStreamerStateRemote(streamerKey, {
-      deaths: nextDeaths,
-      session_deaths: nextSession,
-      all_time_deaths: nextAllTime,
-      boss_kills: nextBossKills,
-      last_updated: Date.now(),
-    });
-
-    // 3. Broadcast via API
+    // 2. Dispatch to API with token
     try {
-      await fetch(`/api/action?key=${encodeURIComponent(streamerKey)}`, {
+      const isResetAction = action === 'reset' || action === 'resetSession' || action === 'resetAll';
+      const endpoint = isResetAction ? `/api/reset` : `/api/action`;
+      const operationId = `rmt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action,
           key: streamerKey,
           token,
+          value: extra.value,
+          target: extra.target || (isResetAction ? 'session' : undefined),
           deaths: nextDeaths,
           sessionDeaths: nextSession,
           allTimeDeaths: nextAllTime,
           bossKills: nextBossKills,
-          ...extra,
+          operationId,
         }),
       });
-    } catch {}
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.deaths !== undefined) setDeaths(data.deaths);
+        if (data.sessionDeaths !== undefined) setSessionDeaths(data.sessionDeaths);
+        if (data.allTimeDeaths !== undefined) setAllTimeDeaths(data.allTimeDeaths);
+        if (data.bossKills !== undefined) setBossKills(data.bossKills);
+      }
+    } catch (err) {
+      console.warn('Remote action dispatch failed:', err);
+    }
   };
 
   const handleCustomSet = async (e) => {
@@ -196,19 +219,13 @@ export default function RemoteControl() {
     if (isNaN(val) || val < 0) return;
 
     if (customPrompt === 'death') {
-      const diff = val - deaths;
-      setDeaths(val);
-      setSessionDeaths((s) => Math.max(0, s + diff));
-      setAllTimeDeaths((a) => Math.max(0, a + Math.max(0, diff)));
-      await sendAction('setCount', { target: 'death', value: val, deaths: val });
+      await sendAction('setCount', { value: val });
     } else if (customPrompt === 'boss') {
-      setBossKills(val);
-      await sendAction('setBossCount', { target: 'boss', value: val, bossKills: val });
+      await sendAction('setBossCount', { value: val });
     }
 
     setCustomPrompt(null);
     setCustomVal('');
-    showToast('Score updated!');
   };
 
   if (loading) {
@@ -268,9 +285,9 @@ export default function RemoteControl() {
         <header className="remote-header">
           <div className="remote-streamer-badge">
             <span className="remote-pulse-dot" />
-            <span>Controlling for: <strong>{tokenInfo.streamerName}</strong></span>
+            <span>Controlling for: <strong>{tokenInfo?.streamerName || 'Streamer'}</strong></span>
           </div>
-          {tokenInfo.expiresAt && (
+          {tokenInfo?.expiresAt && (
             <div className="remote-expiry-pill">
               <Clock size={11} />
               <span>Session active</span>
@@ -371,7 +388,7 @@ export default function RemoteControl() {
             className="remote-tool-btn remote-tool-btn--reset"
             onClick={() => {
               if (confirm('Reset session deaths to 0 for the streamer?')) {
-                sendAction('reset', { target: 'session' });
+                sendAction('resetSession', { target: 'session' });
               }
             }}
           >
@@ -381,7 +398,7 @@ export default function RemoteControl() {
 
         <div className="remote-live-footer">
           <span>● Live OBS Sync Active</span>
-          <span style={{ color: '#c8a65d' }}>{tokenInfo.label}</span>
+          <span style={{ color: '#c8a65d' }}>{tokenInfo?.label || 'Friend Link'}</span>
         </div>
       </div>
 

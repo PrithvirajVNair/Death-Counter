@@ -271,7 +271,7 @@ namespace SoulsGameDeathCounter {
         private static string localStateFilePath = "";
         private static IntPtr hookId = IntPtr.Zero;
         private static LowLevelKeyboardProc hookProc;
-        private static long lastActionTime = 0;
+        private static readonly Dictionary<string, long> lastActionTimes = new Dictionary<string, long>();
         private static readonly object actionLock = new object();
 
         // Local Persistent State (Deaths & Boss Kills saved directly on PC)
@@ -2087,8 +2087,33 @@ namespace SoulsGameDeathCounter {
                 HttpListenerRequest req = context.Request;
                 HttpListenerResponse res = context.Response;
 
-                // Full CORS support so OBS Studio Browser Source & Web Browser connect with zero blocks
-                res.Headers["Access-Control-Allow-Origin"] = "*";
+                // Origin validation: only permit localhost or official application origins
+                string origin = req.Headers["Origin"];
+                bool isAllowedOrigin = false;
+                if (string.IsNullOrEmpty(origin)) {
+                    isAllowedOrigin = true;
+                } else {
+                    string lower = origin.ToLowerInvariant();
+                    if (lower.StartsWith("http://localhost:") ||
+                        lower.StartsWith("http://127.0.0.1:") ||
+                        lower == "http://localhost" ||
+                        lower == "http://127.0.0.1" ||
+                        lower.StartsWith("https://soulgamedc-rosy.vercel.app") ||
+                        lower.Contains(".vercel.app")) {
+                        isAllowedOrigin = true;
+                    }
+                }
+
+                if (!isAllowedOrigin) {
+                    res.StatusCode = 403;
+                    byte[] errBytes = System.Text.Encoding.UTF8.GetBytes("{\"error\":\"Forbidden origin\"}");
+                    res.ContentType = "application/json";
+                    res.OutputStream.Write(errBytes, 0, errBytes.Length);
+                    res.Close();
+                    return;
+                }
+
+                res.Headers["Access-Control-Allow-Origin"] = string.IsNullOrEmpty(origin) ? "*" : origin;
                 res.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
                 res.Headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With";
                 res.Headers["Access-Control-Allow-Private-Network"] = "true";
@@ -2361,8 +2386,11 @@ namespace SoulsGameDeathCounter {
 
             long now = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
             lock (actionLock) {
-                if (now - lastActionTime < 350) return;
-                lastActionTime = now;
+                long prevTime;
+                if (lastActionTimes.TryGetValue(action, out prevTime)) {
+                    if (now - prevTime < 350) return;
+                }
+                lastActionTimes[action] = now;
             }
 
             int curD, curS, curA, curB;

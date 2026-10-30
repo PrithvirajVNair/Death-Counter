@@ -165,6 +165,9 @@ namespace SoulsGameDeathCounter {
                 Log("Loaded previous local score from PC: " + localDeaths + " Deaths");
             }
 
+            // Direct OBS Local Server (http://127.0.0.1:4455)
+            StartLocalHttpServer();
+
             // Background config watcher
             Thread configThread = new Thread(new ThreadStart(ConfigWatchLoop));
             configThread.IsBackground = true;
@@ -289,25 +292,150 @@ namespace SoulsGameDeathCounter {
                 curT = localLastUpdated;
             }
 
-            Log(string.Format("Global key triggered '{0}'. Local Deaths={1}. Target={2}", action, curD, serverUrl));
+            Log(string.Format("Global key triggered '{0}'. Local Deaths={1}.", action, curD));
 
-            // Execute HTTP call asynchronously so keyboard hook is never blocked
-            ThreadPool.QueueUserWorkItem(delegate {
-                try {
-                    using (WebClient client = new WebClient()) {
-                        client.Headers[HttpRequestHeader.ContentType] = "application/json";
-                        string endpoint = serverUrl.TrimEnd('/') + "/api/action";
-                        string payload = string.Format(
-                            "{{\"action\":\"{0}\",\"deaths\":{1},\"sessionDeaths\":{2},\"allTimeDeaths\":{3},\"lastUpdated\":{4}}}",
-                            action, curD, curS, curA, curT
-                        );
-                        string res = client.UploadString(endpoint, "POST", payload);
-                        Log("Action '" + action + "' response: " + res);
+            if (!string.IsNullOrEmpty(serverUrl) && serverUrl.Contains("channel=")) {
+                ThreadPool.QueueUserWorkItem(delegate {
+                    try {
+                        using (WebClient client = new WebClient()) {
+                            client.Headers[HttpRequestHeader.ContentType] = "application/json";
+                            string endpoint = serverUrl.TrimEnd('/') + "/api/action";
+                            string payload = string.Format(
+                                "{{\"action\":\"{0}\",\"deaths\":{1},\"sessionDeaths\":{2},\"allTimeDeaths\":{3},\"lastUpdated\":{4}}}",
+                                action, curD, curS, curA, curT
+                            );
+                            string res = client.UploadString(endpoint, "POST", payload);
+                            Log("Action '" + action + "' response: " + res);
+                        }
+                    } catch (Exception ex) {
+                        Log("Action error: " + ex.Message);
                     }
-                } catch (Exception ex) {
-                    Log("Action error: " + ex.Message);
+                });
+            }
+        }
+
+        private static HttpListener localHttpListener = null;
+        private static Thread localHttpThread = null;
+        private static bool isLocalServerRunning = false;
+
+        private static void StartLocalHttpServer() {
+            try {
+                localHttpListener = new HttpListener();
+                localHttpListener.Prefixes.Add("http://127.0.0.1:4455/");
+                localHttpListener.Start();
+                isLocalServerRunning = true;
+                localHttpThread = new Thread(LocalHttpLoop);
+                localHttpThread.IsBackground = true;
+                localHttpThread.Start();
+                Log("Direct OBS Server active on http://127.0.0.1:4455");
+            } catch (Exception ex) {
+                Log("Local server notice on port 4455: " + ex.Message);
+            }
+        }
+
+        private static void LocalHttpLoop() {
+            while (isLocalServerRunning && localHttpListener != null && localHttpListener.IsListening) {
+                try {
+                    HttpListenerContext context = localHttpListener.GetContext();
+                    ThreadPool.QueueUserWorkItem(delegate {
+                        HandleLocalRequest(context);
+                    });
+                } catch {
+                    if (!isLocalServerRunning) break;
                 }
-            });
+            }
+        }
+
+        private static void HandleLocalRequest(HttpListenerContext context) {
+            try {
+                HttpListenerRequest req = context.Request;
+                HttpListenerResponse res = context.Response;
+
+                res.Headers["Access-Control-Allow-Origin"] = "*";
+                res.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
+                res.Headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
+                res.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+
+                if (req.HttpMethod == "OPTIONS") {
+                    res.StatusCode = 204;
+                    res.Close();
+                    return;
+                }
+
+                string path = req.Url.AbsolutePath.ToLowerInvariant();
+
+                if (req.HttpMethod == "GET" && (path == "/api/state" || path == "/" || path == "/state")) {
+                    string json;
+                    lock (stateLock) {
+                        json = string.Format(
+                            "{{\"deaths\":{0},\"sessionDeaths\":{1},\"allTimeDeaths\":{2},\"lastUpdated\":{3},\"isLocal\":true}}",
+                            localDeaths, localSessionDeaths, localAllTimeDeaths, localLastUpdated
+                        );
+                    }
+                    byte[] buffer = System.Text.Encoding.UTF8.GetBytes(json);
+                    res.ContentType = "application/json";
+                    res.ContentLength64 = buffer.Length;
+                    res.StatusCode = 200;
+                    res.OutputStream.Write(buffer, 0, buffer.Length);
+                    res.OutputStream.Close();
+                    return;
+                }
+
+                if (req.HttpMethod == "POST" && (path == "/api/action" || path == "/action" || path == "/api/state")) {
+                    string body = "";
+                    using (StreamReader reader = new StreamReader(req.InputStream, req.ContentEncoding)) {
+                        body = reader.ReadToEnd();
+                    }
+
+                    Match mAct = Regex.Match(body, @"""action""\s*:\s*""([^""]+)""");
+                    Match mDeaths = Regex.Match(body, @"""deaths""\s*:\s*(\d+)");
+                    Match mSession = Regex.Match(body, @"""sessionDeaths""\s*:\s*(\d+)");
+                    Match mAllTime = Regex.Match(body, @"""allTimeDeaths""\s*:\s*(\d+)");
+
+                    string action = mAct.Success ? mAct.Groups[1].Value : "";
+
+                    int curD, curS, curA;
+                    long curT;
+
+                    lock (stateLock) {
+                        if (action == "add" || action == "addDeath") {
+                            localDeaths++;
+                            localSessionDeaths++;
+                            localAllTimeDeaths++;
+                        } else if (action == "undo" || action == "undoDeath") {
+                            if (localDeaths > 0) localDeaths--;
+                            if (localSessionDeaths > 0) localSessionDeaths--;
+                        }
+
+                        if (mDeaths.Success) int.TryParse(mDeaths.Groups[1].Value, out localDeaths);
+                        if (mSession.Success) int.TryParse(mSession.Groups[1].Value, out localSessionDeaths);
+                        if (mAllTime.Success) int.TryParse(mAllTime.Groups[1].Value, out localAllTimeDeaths);
+
+                        localLastUpdated = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+                        SaveLocalState();
+
+                        curD = localDeaths;
+                        curS = localSessionDeaths;
+                        curA = localAllTimeDeaths;
+                        curT = localLastUpdated;
+                    }
+
+                    string json = string.Format(
+                        "{{\"success\":true,\"deaths\":{0},\"sessionDeaths\":{1},\"allTimeDeaths\":{2},\"lastUpdated\":{3},\"isLocal\":true}}",
+                        curD, curS, curA, curT
+                    );
+                    byte[] buffer = System.Text.Encoding.UTF8.GetBytes(json);
+                    res.ContentType = "application/json";
+                    res.ContentLength64 = buffer.Length;
+                    res.StatusCode = 200;
+                    res.OutputStream.Write(buffer, 0, buffer.Length);
+                    res.OutputStream.Close();
+                    return;
+                }
+
+                res.StatusCode = 404;
+                res.Close();
+            } catch {}
         }
 
         static void ConfigWatchLoop() {

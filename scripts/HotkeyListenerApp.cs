@@ -282,6 +282,12 @@ namespace SoulsGameDeathCounter {
         private static long localLastUpdated = 0;
         private static readonly object stateLock = new object();
 
+        // Local Direct OBS Server (Runs directly on PC: http://127.0.0.1:4455)
+        private static HttpListener localHttpListener = null;
+        private static Thread localHttpThread = null;
+        private static bool isLocalServerRunning = false;
+        public const int LOCAL_SERVER_PORT = 4455;
+
         // UI Controls
         private Button btnToggle;
 
@@ -335,6 +341,7 @@ namespace SoulsGameDeathCounter {
                 InstallHook();
                 StartAsyncPolling();
                 StartBackgroundStateSync();
+                StartLocalHttpServer();
                 UpdateUIState();
                 UpdateCountersUI();
 
@@ -1258,6 +1265,7 @@ namespace SoulsGameDeathCounter {
                 if (hookId != IntPtr.Zero) {
                     UnhookWindowsHookEx(hookId);
                 }
+                StopLocalHttpServer();
                 trayIcon.Visible = false;
             }
         }
@@ -1703,6 +1711,171 @@ namespace SoulsGameDeathCounter {
             }
         }
 
+        // ─── Direct OBS Local Server (http://127.0.0.1:4455) ───
+        private static void StartLocalHttpServer() {
+            try {
+                if (localHttpListener != null && isLocalServerRunning) return;
+                localHttpListener = new HttpListener();
+                localHttpListener.Prefixes.Add(string.Format("http://127.0.0.1:{0}/", LOCAL_SERVER_PORT));
+                localHttpListener.Start();
+                isLocalServerRunning = true;
+
+                localHttpThread = new Thread(new ThreadStart(LocalHttpServerLoop));
+                localHttpThread.IsBackground = true;
+                localHttpThread.Start();
+
+                if (instance != null) {
+                    instance.LogActivity(string.Format("Direct OBS Server active on http://127.0.0.1:{0} (0ms latency)", LOCAL_SERVER_PORT));
+                }
+            } catch (Exception ex) {
+                if (instance != null) {
+                    instance.LogActivity("Notice: Local server could not bind port 4455: " + ex.Message);
+                }
+            }
+        }
+
+        private static void StopLocalHttpServer() {
+            try {
+                isLocalServerRunning = false;
+                if (localHttpListener != null) {
+                    localHttpListener.Stop();
+                    localHttpListener.Close();
+                    localHttpListener = null;
+                }
+                if (localHttpThread != null && localHttpThread.IsAlive) {
+                    localHttpThread.Abort();
+                    localHttpThread = null;
+                }
+            } catch {}
+        }
+
+        private static void LocalHttpServerLoop() {
+            while (isLocalServerRunning && localHttpListener != null && localHttpListener.IsListening) {
+                try {
+                    HttpListenerContext context = localHttpListener.GetContext();
+                    ThreadPool.QueueUserWorkItem(delegate {
+                        HandleLocalHttpRequest(context);
+                    });
+                } catch {
+                    if (!isLocalServerRunning) break;
+                }
+            }
+        }
+
+        private static void HandleLocalHttpRequest(HttpListenerContext context) {
+            try {
+                HttpListenerRequest req = context.Request;
+                HttpListenerResponse res = context.Response;
+
+                // Full CORS support so OBS Studio Browser Source & Web Browser connect with zero blocks
+                res.Headers["Access-Control-Allow-Origin"] = "*";
+                res.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
+                res.Headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With";
+                res.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+                res.Headers["Pragma"] = "no-cache";
+
+                if (req.HttpMethod == "OPTIONS") {
+                    res.StatusCode = 204;
+                    res.Close();
+                    return;
+                }
+
+                string path = req.Url.AbsolutePath.ToLowerInvariant();
+
+                if (req.HttpMethod == "GET" && (path == "/api/state" || path == "/" || path == "/state")) {
+                    string json;
+                    lock (stateLock) {
+                        json = string.Format(
+                            "{{\"deaths\":{0},\"sessionDeaths\":{1},\"allTimeDeaths\":{2},\"bossKills\":{3},\"lastUpdated\":{4},\"isLocal\":true}}",
+                            localDeaths, localSessionDeaths, localAllTimeDeaths, localBossKills, localLastUpdated
+                        );
+                    }
+                    byte[] buffer = System.Text.Encoding.UTF8.GetBytes(json);
+                    res.ContentType = "application/json";
+                    res.ContentLength64 = buffer.Length;
+                    res.StatusCode = 200;
+                    res.OutputStream.Write(buffer, 0, buffer.Length);
+                    res.OutputStream.Close();
+                    return;
+                }
+
+                if (req.HttpMethod == "POST" && (path == "/api/action" || path == "/action" || path == "/api/state")) {
+                    string body = "";
+                    using (StreamReader reader = new StreamReader(req.InputStream, req.ContentEncoding)) {
+                        body = reader.ReadToEnd();
+                    }
+
+                    Match mAct = Regex.Match(body, @"""action""\s*:\s*""([^""]+)""");
+                    Match mDeaths = Regex.Match(body, @"""deaths""\s*:\s*(\d+)");
+                    Match mBoss = Regex.Match(body, @"""bossKills""\s*:\s*(\d+)");
+                    Match mSession = Regex.Match(body, @"""sessionDeaths""\s*:\s*(\d+)");
+                    Match mAllTime = Regex.Match(body, @"""allTimeDeaths""\s*:\s*(\d+)");
+
+                    string action = mAct.Success ? mAct.Groups[1].Value : "";
+
+                    int curD, curS, curA, curB;
+                    long curT;
+
+                    lock (stateLock) {
+                        if (action == "add" || action == "addDeath") {
+                            localDeaths++;
+                            localSessionDeaths++;
+                            localAllTimeDeaths++;
+                        } else if (action == "undo" || action == "undoDeath") {
+                            if (localDeaths > 0) localDeaths--;
+                            if (localSessionDeaths > 0) localSessionDeaths--;
+                        } else if (action == "addBossKill" || action == "bossSlain") {
+                            localBossKills++;
+                        } else if (action == "undoBossKill") {
+                            if (localBossKills > 0) localBossKills--;
+                        } else if (action == "reset" || action == "resetSession") {
+                            localSessionDeaths = 0;
+                        } else if (action == "resetAll") {
+                            localDeaths = 0;
+                            localSessionDeaths = 0;
+                            localBossKills = 0;
+                        }
+
+                        if (mDeaths.Success) int.TryParse(mDeaths.Groups[1].Value, out localDeaths);
+                        if (mSession.Success) int.TryParse(mSession.Groups[1].Value, out localSessionDeaths);
+                        if (mAllTime.Success) int.TryParse(mAllTime.Groups[1].Value, out localAllTimeDeaths);
+                        if (mBoss.Success) int.TryParse(mBoss.Groups[1].Value, out localBossKills);
+
+                        localLastUpdated = GetCurrentTimestampMs();
+                        SaveLocalState();
+
+                        curD = localDeaths;
+                        curS = localSessionDeaths;
+                        curA = localAllTimeDeaths;
+                        curB = localBossKills;
+                        curT = localLastUpdated;
+                    }
+
+                    if (instance != null) {
+                        instance.SafeInvoke(delegate {
+                            instance.UpdateStatusDisplay(curD, curB);
+                            instance.LogActivity(string.Format("OBS/Web trigger [{0}] -> Deaths: {1}, Bosses: {2}", action, curD, curB));
+                        });
+                    }
+
+                    string json = string.Format(
+                        "{{\"success\":true,\"deaths\":{0},\"sessionDeaths\":{1},\"allTimeDeaths\":{2},\"bossKills\":{3},\"lastUpdated\":{4},\"isLocal\":true}}",
+                        curD, curS, curA, curB, curT
+                    );
+                    byte[] buffer = System.Text.Encoding.UTF8.GetBytes(json);
+                    res.ContentType = "application/json";
+                    res.ContentLength64 = buffer.Length;
+                    res.StatusCode = 200;
+                    res.OutputStream.Write(buffer, 0, buffer.Length);
+                    res.OutputStream.Close();
+                    return;
+                }
+
+                res.StatusCode = 404;
+                res.Close();
+            } catch {}
+        }
+
         private static void StartBackgroundStateSync() {
             Thread syncThread = new Thread(new ThreadStart(BackgroundStateSyncLoop));
             syncThread.IsBackground = true;
@@ -1720,6 +1893,9 @@ namespace SoulsGameDeathCounter {
         }
 
         private static void SyncWithServerOnce() {
+            // Only sync with remote cloud if a specific private channel is configured
+            if (string.IsNullOrEmpty(serverUrl) || !serverUrl.Contains("channel=")) return;
+
             try {
                 using (WebClient client = new WebClient()) {
                     client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
@@ -1740,7 +1916,6 @@ namespace SoulsGameDeathCounter {
                     long srvTime = mTime.Success ? long.Parse(mTime.Groups[1].Value) : 0;
 
                     lock (stateLock) {
-                        // If server is cold at 0 while we have progress, OR local is newer: reseed server!
                         if ((localLastUpdated > srvTime) || (srvDeaths == 0 && srvBoss == 0 && (localDeaths > 0 || localBossKills > 0))) {
                             string syncEndpoint = serverUrl.TrimEnd('/') + "/api/state";
                             string payload = string.Format(
@@ -1751,7 +1926,6 @@ namespace SoulsGameDeathCounter {
                             return;
                         }
 
-                        // If server has newer timestamp (e.g. user clicked Reset or updated via web browser):
                         if (srvTime > localLastUpdated) {
                             localDeaths = srvDeaths;
                             localSessionDeaths = srvSession;
@@ -1805,40 +1979,36 @@ namespace SoulsGameDeathCounter {
             }
 
             if (instance != null) {
+                string keyDesc = "";
+                string actionDesc = "";
+                if (action == "add") { keyDesc = bindingAdd.DisplayName; actionDesc = "+1 Death"; }
+                else if (action == "undo") { keyDesc = bindingUndo.DisplayName; actionDesc = "Undo Death"; }
+                else if (action == "addBossKill") { keyDesc = bindingAddBoss.DisplayName; actionDesc = "+1 Boss Slain"; }
+                else if (action == "undoBossKill") { keyDesc = bindingUndoBoss.DisplayName; actionDesc = "Undo Boss Slain"; }
+
                 instance.SafeInvoke(delegate {
                     instance.UpdateStatusDisplay(curD, curB);
+                    instance.LogActivity(string.Format("{0} [{1}] -> Saved to PC & Direct OBS! (Death: {2}, Boss: {3})", keyDesc, actionDesc, curD, curB));
                 });
             }
 
-            ThreadPool.QueueUserWorkItem(delegate {
-                try {
-                    using (WebClient client = new WebClient()) {
-                        client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
-                        client.Headers[HttpRequestHeader.ContentType] = "application/json";
-                        string endpoint = serverUrl.TrimEnd('/') + "/api/action";
-                        string payload = string.Format(
-                            "{{\"action\":\"{0}\",\"deaths\":{1},\"sessionDeaths\":{2},\"allTimeDeaths\":{3},\"bossKills\":{4},\"lastUpdated\":{5}}}",
-                            action, curD, curS, curA, curB, curT
-                        );
-                        string res = client.UploadString(endpoint, "POST", payload);
-
-                        if (instance != null) {
-                            string keyDesc = "";
-                            string actionDesc = "";
-                            if (action == "add") { keyDesc = bindingAdd.DisplayName; actionDesc = "+1 Death"; }
-                            else if (action == "undo") { keyDesc = bindingUndo.DisplayName; actionDesc = "Undo Death"; }
-                            else if (action == "addBossKill") { keyDesc = bindingAddBoss.DisplayName; actionDesc = "+1 Boss Slain"; }
-                            else if (action == "undoBossKill") { keyDesc = bindingUndoBoss.DisplayName; actionDesc = "Undo Boss Slain"; }
-
-                            instance.LogActivity(string.Format("{0} [{1}] -> Saved to PC & Live OBS! (Death: {2}, Boss: {3})", keyDesc, actionDesc, curD, curB));
+            // Only sync with remote cloud if a specific private channel is configured
+            if (!string.IsNullOrEmpty(serverUrl) && serverUrl.Contains("channel=")) {
+                ThreadPool.QueueUserWorkItem(delegate {
+                    try {
+                        using (WebClient client = new WebClient()) {
+                            client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
+                            client.Headers[HttpRequestHeader.ContentType] = "application/json";
+                            string endpoint = serverUrl.TrimEnd('/') + "/api/action";
+                            string payload = string.Format(
+                                "{{\"action\":\"{0}\",\"deaths\":{1},\"sessionDeaths\":{2},\"allTimeDeaths\":{3},\"bossKills\":{4},\"lastUpdated\":{5}}}",
+                                action, curD, curS, curA, curB, curT
+                            );
+                            client.UploadString(endpoint, "POST", payload);
                         }
-                    }
-                } catch (Exception ex) {
-                    if (instance != null) {
-                        instance.LogActivity(string.Format("Saved to PC (Death: {0}), server sync notice: {1}", curD, ex.Message));
-                    }
-                }
-            });
+                    } catch {}
+                });
+            }
         }
 
         // ─── Config Loading & Saving ───

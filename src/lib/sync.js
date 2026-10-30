@@ -36,11 +36,40 @@ function markProcessed(id) {
   }
 }
 
+export const LOCAL_APP_URL = 'http://127.0.0.1:4455';
+let localAppActive = false;
+let lastLocalCheckTime = 0;
+
+export async function checkLocalApp() {
+  const now = Date.now();
+  if (localAppActive && now - lastLocalCheckTime < 2500) return true;
+  if (!localAppActive && now - lastLocalCheckTime < 1200) return false;
+
+  try {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeout = setTimeout(() => controller?.abort(), 350);
+    const res = await fetch(`${LOCAL_APP_URL}/api/state?_t=${now}`, {
+      signal: controller?.signal,
+      cache: 'no-store',
+    });
+    clearTimeout(timeout);
+    if (res.ok) {
+      localAppActive = true;
+      lastLocalCheckTime = now;
+      return true;
+    }
+  } catch {}
+  localAppActive = false;
+  lastLocalCheckTime = now;
+  return false;
+}
+
 /**
  * Broadcast state update across all channels:
+ * - Local companion app (http://127.0.0.1:4455)
  * - Local BroadcastChannel (immediate)
  * - LocalStorage event (fallback)
- * - Server POST /api/state (reaches OBS Browser Source via SSE & persists to disk)
+ * - Private channel (cloud) if specified
  */
 export function broadcastUpdate(type, payload) {
   const id = generateMessageId();
@@ -66,42 +95,78 @@ export function broadcastUpdate(type, payload) {
     }, 100);
   } catch {}
 
-  // 3. Server HTTP POST -> broadcasts via SSE to OBS Browser Source and other devices
-  try {
-    const apiPayload = {
-      type,
-      ...payload,
-      triggerAnim: payload?.triggerAnim || false,
-      lastUpdated: payload?.lastUpdated || Date.now(),
-    };
-    fetch('/api/state', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(apiPayload),
-    }).catch(() => {
-      // Server might be in static preview or offline, local sync continues
-    });
-  } catch {}
+  // 3. Direct local connection: If companion app is running, send directly to local PC server!
+  if (localAppActive) {
+    try {
+      fetch(`${LOCAL_APP_URL}/api/action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: type, ...payload }),
+      }).catch(() => {});
+      return;
+    } catch {}
+  }
+
+  // 4. Remote Cloud sync: ONLY if a private channel/room is explicitly specified
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search);
+    const channel = params.get('channel') || params.get('room');
+    if (channel) {
+      try {
+        const apiPayload = {
+          type,
+          channel,
+          ...payload,
+          triggerAnim: payload?.triggerAnim || false,
+          lastUpdated: payload?.lastUpdated || Date.now(),
+        };
+        fetch(`/api/state?channel=${encodeURIComponent(channel)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(apiPayload),
+        }).catch(() => {});
+      } catch {}
+    }
+  }
 }
 
 /**
- * Fetch authoritative state directly from server
+ * Fetch authoritative state directly from local desktop app or private channel
  */
 export async function fetchServerState() {
-  try {
-    const res = await fetch(`/api/state?_t=${Date.now()}`, {
-      cache: 'no-store',
-      headers: {
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        Pragma: 'no-cache',
-      },
-    });
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch {
-    // Silently fall back to storage
+  // 1. Direct local connection (0ms latency, 100% offline & private to this PC)
+  const isLocal = await checkLocalApp();
+  if (isLocal) {
+    try {
+      const res = await fetch(`${LOCAL_APP_URL}/api/state?_t=${Date.now()}`, {
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {}
   }
+
+  // 2. Cloud Server Sync: ONLY if a specific channel is requested in URL
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search);
+    const channel = params.get('channel') || params.get('room');
+    if (channel) {
+      try {
+        const res = await fetch(`/api/state?channel=${encodeURIComponent(channel)}&_t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            Pragma: 'no-cache',
+          },
+        });
+        if (res.ok) {
+          return await res.json();
+        }
+      } catch {}
+    }
+  }
+
   return null;
 }
 

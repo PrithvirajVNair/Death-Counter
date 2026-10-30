@@ -44,14 +44,16 @@ export default async function handler(req, res) {
   try {
     const isActionPath = pathname.endsWith('/action') || pathname.includes('/action');
     const isResetPath = pathname.endsWith('/reset') || pathname.includes('/reset');
+    const queryChannel = url.searchParams.get('channel') || url.searchParams.get('room') || '';
 
     if (req.method === 'POST') {
       const body = await parseBody(req);
+      const channel = queryChannel || body.channel || '';
 
       // ─── 1. Action Handler (by URL path or by presence of body.action) ───
       if (isActionPath || body.action) {
         const rawAction = body.action || 'add';
-        const { state, normAction } = applyAction(rawAction, body.value, body);
+        const { state, normAction } = applyAction(rawAction, body.value, body, channel);
         return res.status(200).json({
           ok: true,
           action: normAction,
@@ -67,7 +69,7 @@ export default async function handler(req, res) {
       // ─── 2. Reset Handler ───
       if (isResetPath || body.type === 'reset') {
         const target = body.target || 'session';
-        const state = resetState(target);
+        const state = resetState(target, channel);
         return res.status(200).json({
           ok: true,
           reset: target,
@@ -81,7 +83,7 @@ export default async function handler(req, res) {
       }
 
       // ─── 3. State Update Handler ───
-      const updated = updateState(body);
+      const updated = updateState(body, channel);
       return res.status(200).json({
         ok: true,
         deaths: updated.deaths,
@@ -95,7 +97,7 @@ export default async function handler(req, res) {
 
     // ─── 4. State Retrieval Handler (GET) ───
     if (req.method === 'GET') {
-      return res.status(200).json(getState());
+      return res.status(200).json(getState(queryChannel));
     }
 
     return res.status(405).json({ error: 'Method Not Allowed' });

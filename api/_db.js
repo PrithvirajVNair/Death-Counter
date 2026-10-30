@@ -57,18 +57,24 @@ function writeDiskCache(state) {
   } catch {}
 }
 
-export function getState() {
-  if (!globalThis.__DEATH_COUNTER_STATE__) {
-    const disk = readDiskCache();
-    globalThis.__DEATH_COUNTER_STATE__ = disk
-      ? { ...DEFAULT_STATE, ...disk }
-      : { ...DEFAULT_STATE };
+const channelMap = globalThis.__DEATH_COUNTER_CHANNELS__ || (globalThis.__DEATH_COUNTER_CHANNELS__ = new Map());
+
+export function getState(channel = '') {
+  if (!channel) {
+    // If no channel is specified, return clean isolated default state so strangers never see each other's data!
+    return { ...DEFAULT_STATE };
   }
-  return globalThis.__DEATH_COUNTER_STATE__;
+  if (!channelMap.has(channel)) {
+    channelMap.set(channel, { ...DEFAULT_STATE });
+  }
+  return channelMap.get(channel);
 }
 
-export function updateState(partial = {}) {
-  const current = getState();
+export function updateState(partial = {}, channel = '') {
+  if (!channel) {
+    return { ...DEFAULT_STATE, ...partial };
+  }
+  const current = getState(channel);
   const updateTimestamp = partial.lastUpdated || Date.now();
 
   // If incoming state is strictly older than current server state, do not roll back!
@@ -94,13 +100,15 @@ export function updateState(partial = {}) {
     lastUpdated: Math.max(updateTimestamp, current.lastUpdated || 0),
   };
 
-  globalThis.__DEATH_COUNTER_STATE__ = next;
-  writeDiskCache(next);
+  channelMap.set(channel, next);
   return next;
 }
 
-export function applyAction(rawAction, value, extra = {}) {
-  const state = getState();
+export function applyAction(rawAction, value, extra = {}, channel = '') {
+  if (!channel) {
+    return { state: { ...DEFAULT_STATE }, normAction: rawAction };
+  }
+  const state = getState(channel);
   const now = extra.lastUpdated || Date.now();
 
   const normAction =
@@ -160,14 +168,14 @@ export function applyAction(rawAction, value, extra = {}) {
   }
 
   state.lastUpdated = Math.max(now, state.lastUpdated || 0);
-  globalThis.__DEATH_COUNTER_STATE__ = state;
-  writeDiskCache(state);
+  channelMap.set(channel, state);
 
   return { state, normAction };
 }
 
-export function resetState(target = 'session') {
-  const state = getState();
+export function resetState(target = 'session', channel = '') {
+  if (!channel) return { ...DEFAULT_STATE };
+  const state = getState(channel);
   state.deaths = 0;
   state.sessionDeaths = 0;
   state.history = [];
@@ -180,7 +188,6 @@ export function resetState(target = 'session') {
   }
 
   state.lastUpdated = Date.now();
-  globalThis.__DEATH_COUNTER_STATE__ = state;
-  writeDiskCache(state);
+  channelMap.set(channel, state);
   return state;
 }

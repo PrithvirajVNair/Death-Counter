@@ -1,0 +1,354 @@
+/* Souls Remote Operator Page Styles */
+
+.remote-page {
+  min-height: 100vh;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 20%, #1a1b15 0%, #0c0d0a 80%, #060705 100%);
+  color: #e5dec9;
+  font-family: 'Cinzel', 'Georgia', serif;
+  padding: 1rem;
+  position: relative;
+  overflow-x: hidden;
+  box-sizing: border-box;
+}
+
+.remote-card {
+  width: 100%;
+  max-width: 480px;
+  background: rgba(18, 19, 15, 0.94);
+  border: 1px solid rgba(200, 166, 93, 0.35);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8), inset 0 0 30px rgba(200, 166, 93, 0.04);
+  border-radius: 12px;
+  padding: 1.4rem;
+  backdrop-filter: blur(16px);
+  position: relative;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+/* Header */
+.remote-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(200, 166, 93, 0.2);
+  padding-bottom: 0.85rem;
+}
+
+.remote-streamer-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: #c8a65d;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.remote-streamer-badge strong {
+  color: #f3eedf;
+  font-weight: 600;
+}
+
+.remote-pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 8px #4ade80;
+  animation: pulseDot 2s infinite ease-in-out;
+}
+
+@keyframes pulseDot {
+  0%, 100% { opacity: 0.8; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+.remote-expiry-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  color: #a09985;
+  background: rgba(40, 42, 34, 0.6);
+  padding: 3px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(80, 75, 60, 0.3);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Scoreboard */
+.remote-scoreboard {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+}
+
+.remote-score-box {
+  background: rgba(12, 13, 10, 0.85);
+  border: 1px solid rgba(70, 65, 50, 0.4);
+  border-radius: 8px;
+  padding: 1rem 0.6rem;
+  text-align: center;
+  position: relative;
+  cursor: pointer;
+  transition: transform 0.15s, border-color 0.2s, box-shadow 0.2s;
+  user-select: none;
+}
+
+.remote-score-box:hover {
+  border-color: rgba(200, 166, 93, 0.6);
+  transform: translateY(-2px);
+}
+
+.remote-score-box--deaths {
+  border-left: 3px solid #ef4444;
+}
+
+.remote-score-box--boss {
+  border-left: 3px solid #f59e0b;
+}
+
+.remote-score-tag {
+  font-size: 0.75rem;
+  letter-spacing: 1px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  margin-bottom: 0.3rem;
+}
+
+.remote-score-box--deaths .remote-score-tag {
+  color: #f87171;
+}
+
+.remote-score-box--boss .remote-score-tag {
+  color: #fbbf24;
+}
+
+.remote-score-num {
+  font-size: 2.5rem;
+  font-weight: 700;
+  line-height: 1;
+  margin: 0.2rem 0;
+  letter-spacing: -1px;
+}
+
+.remote-score-box--deaths .remote-score-num {
+  color: #fca5a5;
+  text-shadow: 0 0 16px rgba(239, 68, 68, 0.4);
+}
+
+.remote-score-box--boss .remote-score-num {
+  color: #fef08a;
+  text-shadow: 0 0 16px rgba(245, 158, 11, 0.4);
+}
+
+.remote-score-sub {
+  font-size: 0.7rem;
+  color: #8c8574;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Action Buttons */
+.remote-actions {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: auto auto;
+  gap: 0.75rem;
+}
+
+.remote-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  border-radius: 8px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  border: 1px solid transparent;
+  outline: none;
+  font-family: 'Cinzel', 'Georgia', serif;
+}
+
+.remote-btn:active {
+  transform: scale(0.97);
+}
+
+/* +1 Death Button */
+.remote-btn--death-add {
+  grid-column: 1;
+  grid-row: 1;
+  padding: 1.15rem 0.8rem;
+  font-size: 1.15rem;
+  background: linear-gradient(180deg, #451313 0%, #2b0b0b 100%);
+  color: #fecaca;
+  border-color: #991b1b;
+  box-shadow: 0 4px 16px rgba(185, 28, 28, 0.35);
+}
+
+.remote-btn--death-add:hover {
+  background: linear-gradient(180deg, #5c1818 0%, #3d1010 100%);
+  border-color: #dc2626;
+  box-shadow: 0 6px 20px rgba(220, 38, 38, 0.5);
+}
+
+/* Undo Death Button */
+.remote-btn--death-undo {
+  grid-column: 2;
+  grid-row: 1;
+  padding: 0.8rem 0.5rem;
+  font-size: 0.78rem;
+  background: rgba(35, 36, 30, 0.8);
+  color: #c5bfb0;
+  border-color: rgba(90, 85, 70, 0.4);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.remote-btn--death-undo:hover {
+  background: rgba(50, 52, 42, 0.9);
+  color: #f3eedf;
+  border-color: rgba(140, 130, 100, 0.6);
+}
+
+/* +1 Boss Slain Button */
+.remote-btn--boss-add {
+  grid-column: 1;
+  grid-row: 2;
+  padding: 1.15rem 0.8rem;
+  font-size: 1.05rem;
+  background: linear-gradient(180deg, #483915 0%, #2b210a 100%);
+  color: #fef08a;
+  border-color: #b45309;
+  box-shadow: 0 4px 16px rgba(217, 119, 6, 0.35);
+}
+
+.remote-btn--boss-add:hover {
+  background: linear-gradient(180deg, #5c491b 0%, #3c2f0e 100%);
+  border-color: #f59e0b;
+  box-shadow: 0 6px 20px rgba(245, 158, 11, 0.5);
+}
+
+/* Undo Boss Button */
+.remote-btn--boss-undo {
+  grid-column: 2;
+  grid-row: 2;
+  padding: 0.8rem 0.5rem;
+  font-size: 0.78rem;
+  background: rgba(35, 36, 30, 0.8);
+  color: #c5bfb0;
+  border-color: rgba(90, 85, 70, 0.4);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.remote-btn--boss-undo:hover {
+  background: rgba(50, 52, 42, 0.9);
+  color: #f3eedf;
+  border-color: rgba(140, 130, 100, 0.6);
+}
+
+/* Tool buttons */
+.remote-footer-tools {
+  display: flex;
+  gap: 0.5rem;
+  border-top: 1px solid rgba(80, 75, 60, 0.25);
+  padding-top: 0.9rem;
+}
+
+.remote-tool-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.4rem;
+  font-size: 0.75rem;
+  background: rgba(25, 26, 20, 0.8);
+  color: #a09985;
+  border: 1px solid rgba(70, 65, 50, 0.35);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.remote-tool-btn:hover {
+  background: rgba(40, 42, 33, 0.9);
+  color: #e5dec9;
+  border-color: rgba(200, 166, 93, 0.5);
+}
+
+.remote-tool-btn--reset:hover {
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+/* Live footer */
+.remote-live-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  color: #787160;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  padding-top: 0.2rem;
+}
+
+/* Pulse animation on click */
+.pulse-anim {
+  animation: pulseClick 0.4s ease-out;
+}
+
+@keyframes pulseClick {
+  0% { transform: scale(0.97); }
+  50% { transform: scale(1.04); }
+  100% { transform: scale(1); }
+}
+
+/* Toast */
+.remote-toast {
+  position: fixed;
+  top: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(18, 19, 14, 0.96);
+  border: 1px solid #4ade80;
+  color: #f3eedf;
+  padding: 0.55rem 1.1rem;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  z-index: 1000;
+  animation: toastFade 0.25s ease-out;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+@keyframes toastFade {
+  from { opacity: 0; transform: translate(-50%, -10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.remote-rune-spinner {
+  width: 44px;
+  height: 44px;
+  border: 3px solid rgba(200, 166, 93, 0.2);
+  border-top-color: #c8a65d;
+  border-radius: 50%;
+  margin: 0 auto;
+  animation: spin 1s infinite linear;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

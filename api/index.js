@@ -44,11 +44,22 @@ export default async function handler(req, res) {
   try {
     const isActionPath = pathname.endsWith('/action') || pathname.includes('/action');
     const isResetPath = pathname.endsWith('/reset') || pathname.includes('/reset');
-    const queryChannel = url.searchParams.get('key') || url.searchParams.get('streamerKey') || url.searchParams.get('channel') || url.searchParams.get('room') || '';
+    const queryToken = url.searchParams.get('token') || '';
+    let queryChannel = url.searchParams.get('key') || url.searchParams.get('streamerKey') || url.searchParams.get('channel') || url.searchParams.get('room') || '';
+
+    if (!queryChannel && queryToken && queryToken.startsWith('mod_')) {
+      const parts = queryToken.split('_');
+      if (parts.length >= 2) queryChannel = parts[1];
+    }
 
     if (req.method === 'POST') {
       const body = await parseBody(req);
-      const channel = queryChannel || body.key || body.streamerKey || body.channel || '';
+      let channel = queryChannel || body.key || body.streamerKey || body.channel || '';
+
+      if (!channel && body.token && body.token.startsWith('mod_')) {
+        const parts = body.token.split('_');
+        if (parts.length >= 2) channel = parts[1];
+      }
 
       // ─── 1. Action Handler (by URL path or by presence of body.action) ───
       if (isActionPath || body.action) {

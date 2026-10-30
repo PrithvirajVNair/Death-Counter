@@ -61,3 +61,38 @@ create trigger set_timestamp
   before update on public.streamer_states
   for each row
   execute procedure public.handle_updated_at();
+
+-- ==============================================================================
+-- 6. Create streamer_remote_tokens table (for Friend & Mod Remote Control)
+-- ==============================================================================
+create table if not exists public.streamer_remote_tokens (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade,
+  streamer_key text not null,
+  streamer_name text not null,
+  token text unique not null,
+  label text default 'Friend Access',
+  expires_at timestamptz, -- null means never expires
+  is_revoked boolean default false,
+  created_at timestamptz default now()
+);
+
+-- Index for instant token validation
+create index if not exists idx_streamer_remote_tokens_token on public.streamer_remote_tokens(token);
+
+-- Enable RLS
+alter table public.streamer_remote_tokens enable row level security;
+
+-- Policies:
+-- Streamers can manage their own remote links
+create policy "Streamers can manage own remote tokens"
+  on public.streamer_remote_tokens
+  for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- Anyone can validate non-revoked, non-expired tokens
+create policy "Public token lookup"
+  on public.streamer_remote_tokens
+  for select
+  using (not is_revoked and (expires_at is null or expires_at > now()));

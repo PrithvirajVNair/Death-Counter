@@ -2,13 +2,15 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useDeathCounter } from '../hooks/useDeathCounter';
 import { useAuth } from '../context/AuthContext';
 import AuthModal from '../components/AuthModal';
+import ShareRemoteModal from '../components/ShareRemoteModal';
 import CounterControls from '../components/CounterControls';
 import OverlayPreview from '../components/OverlayPreview';
 import PresetSelector from '../components/PresetSelector';
 import CustomizationPanel from '../components/CustomizationPanel';
+import Embers from '../components/Embers';
 import ToastContainer, { showToast } from '../components/Toast';
 import { DEFAULT_PRESET_COLORS } from '../lib/defaults';
-import { Key, Copy, Check, LogOut, Radio } from 'lucide-react';
+import { Key, Copy, Check, LogOut, Radio, Users } from 'lucide-react';
 import '../styles/controller.css';
 import '../styles/auth.css';
 
@@ -18,6 +20,7 @@ export default function Controller() {
   const [transparentPreview, setTransparentPreview] = useState(false);
   const [copiedKey, setCopiedKey] = useState(false);
   const [copiedOverlay, setCopiedOverlay] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
 
   const {
     deaths, sessionDeaths, allTimeDeaths, bossKills, settings, shortcuts, deathAnim, bossSlainAnim,
@@ -222,6 +225,15 @@ export default function Controller() {
               </button>
               <button
                 type="button"
+                className="btn btn--sm btn--secondary"
+                style={{ fontSize: '11px', padding: '3px 8px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                onClick={() => setShareModalOpen(true)}
+                title="Create a remote link for a friend to update your counter live"
+              >
+                <Users size={12} color="#C8A65D" /> Friend Access
+              </button>
+              <button
+                type="button"
                 className="btn-signout"
                 onClick={signOut}
                 title="Sign Out"
@@ -359,25 +371,7 @@ export default function Controller() {
       </footer>
 
       <ToastContainer />
-    </div>
-  );
-}
-
-function Embers({ count = 8 }) {
-  const positions = useMemo(() =>
-    Array.from({ length: count }, () => ({
-      left: `${10 + Math.random() * 80}%`,
-      animationDelay: `${Math.random() * 6}s`,
-      animationDuration: `${4 + Math.random() * 4}s`,
-    })),
-    [count]
-  );
-
-  return (
-    <div className="embers" aria-hidden="true">
-      {positions.map((style, i) => (
-        <div key={i} className="ember" style={style} />
-      ))}
+      <ShareRemoteModal isOpen={shareModalOpen} onClose={() => setShareModalOpen(false)} />
     </div>
   );
 }

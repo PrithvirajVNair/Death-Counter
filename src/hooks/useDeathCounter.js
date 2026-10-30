@@ -345,6 +345,15 @@ export function useDeathCounter() {
     const nextRevision = (cur.revision || 1) + 1;
     const nextHistory = [...cur.history.slice(-99), { action: 'add', timestamp: Date.now(), value: nextDeaths }];
 
+    stateRef.current = {
+      ...stateRef.current,
+      deaths: nextDeaths,
+      sessionDeaths: nextSession,
+      allTimeDeaths: nextAllTime,
+      revision: nextRevision,
+      history: nextHistory,
+    };
+
     setDeaths(nextDeaths);
     setSessionDeaths(nextSession);
     setAllTimeDeaths(nextAllTime);
@@ -379,6 +388,14 @@ export function useDeathCounter() {
     const nextRevision = (cur.revision || 1) + 1;
     const nextHistory = [...cur.history.slice(-99), { action: 'undo', timestamp: Date.now(), value: nextDeaths }];
 
+    stateRef.current = {
+      ...stateRef.current,
+      deaths: nextDeaths,
+      sessionDeaths: nextSession,
+      revision: nextRevision,
+      history: nextHistory,
+    };
+
     setDeaths(nextDeaths);
     setSessionDeaths(nextSession);
     setRevision(nextRevision);
@@ -405,6 +422,14 @@ export function useDeathCounter() {
     const cur = stateRef.current;
     const nextRevision = (cur.revision || 1) + 1;
 
+    stateRef.current = {
+      ...stateRef.current,
+      deaths: 0,
+      sessionDeaths: 0,
+      revision: nextRevision,
+      history: [],
+    };
+
     setDeaths(0);
     setSessionDeaths(0);
     setRevision(nextRevision);
@@ -429,6 +454,14 @@ export function useDeathCounter() {
     lastLocalActionTimeRef.current = Date.now();
     const cur = stateRef.current;
     const nextRevision = (cur.revision || 1) + 1;
+
+    stateRef.current = {
+      ...stateRef.current,
+      deaths: 0,
+      sessionDeaths: 0,
+      revision: nextRevision,
+      history: [],
+    };
 
     setDeaths(0);
     setSessionDeaths(0);
@@ -537,6 +570,13 @@ export function useDeathCounter() {
     const cur = stateRef.current;
     const nextKills = (cur.bossKills || 0) + 1;
     const nextRevision = (cur.revision || 1) + 1;
+
+    stateRef.current = {
+      ...stateRef.current,
+      bossKills: nextKills,
+      revision: nextRevision,
+    };
+
     setBossKills(nextKills);
     setRevision(nextRevision);
     saveToStorage('bossKills', nextKills);
@@ -559,6 +599,13 @@ export function useDeathCounter() {
     if (!cur.bossKills || cur.bossKills <= 0) return;
     const nextKills = cur.bossKills - 1;
     const nextRevision = (cur.revision || 1) + 1;
+
+    stateRef.current = {
+      ...stateRef.current,
+      bossKills: nextKills,
+      revision: nextRevision,
+    };
+
     setBossKills(nextKills);
     setRevision(nextRevision);
     saveToStorage('bossKills', nextKills);
@@ -577,6 +624,13 @@ export function useDeathCounter() {
     lastLocalActionTimeRef.current = Date.now();
     const cur = stateRef.current;
     const nextRevision = (cur.revision || 1) + 1;
+
+    stateRef.current = {
+      ...stateRef.current,
+      bossKills: 0,
+      revision: nextRevision,
+    };
+
     setBossKills(0);
     setRevision(nextRevision);
     saveToStorage('bossKills', 0);
@@ -600,6 +654,15 @@ export function useDeathCounter() {
     const nextAllTime = Math.max(0, cur.allTimeDeaths + Math.max(0, diff));
     const nextRevision = (cur.revision || 1) + 1;
     const nextHistory = [...cur.history.slice(-99), { action: 'set', timestamp: Date.now(), value: nextDeaths }];
+
+    stateRef.current = {
+      ...stateRef.current,
+      deaths: nextDeaths,
+      sessionDeaths: nextSession,
+      allTimeDeaths: nextAllTime,
+      revision: nextRevision,
+      history: nextHistory,
+    };
 
     setDeaths(nextDeaths);
     setSessionDeaths(nextSession);
@@ -630,6 +693,12 @@ export function useDeathCounter() {
     const nextKills = Math.max(0, parseInt(customValue, 10) || 0);
     const cur = stateRef.current;
     const nextRevision = (cur.revision || 1) + 1;
+
+    stateRef.current = {
+      ...stateRef.current,
+      bossKills: nextKills,
+      revision: nextRevision,
+    };
 
     setBossKills(nextKills);
     setRevision(nextRevision);
@@ -662,19 +731,32 @@ export function useDeathCounter() {
     bossSlainAnim,
     loadFullState: (s) => {
       if (!s) return;
+      const incomingRev = Number(s.revision ?? 0);
+      const currentRev = Number(stateRef.current.revision ?? 0);
+      // Authoritative revision check: drop older incoming revisions to prevent optimistic rollback / flicker
+      if (incomingRev > 0 && currentRev > 0 && incomingRev < currentRev) {
+        return;
+      }
+      if (incomingRev > 0) {
+        stateRef.current.revision = incomingRev;
+      }
       if (s.deaths !== undefined) {
+        stateRef.current.deaths = s.deaths;
         setDeaths(s.deaths);
         saveToStorage('deaths', s.deaths);
       }
       if (s.sessionDeaths !== undefined) {
+        stateRef.current.sessionDeaths = s.sessionDeaths;
         setSessionDeaths(s.sessionDeaths);
         saveToStorage('sessionDeaths', s.sessionDeaths);
       }
       if (s.allTimeDeaths !== undefined) {
+        stateRef.current.allTimeDeaths = s.allTimeDeaths;
         setAllTimeDeaths(s.allTimeDeaths);
         saveToStorage('allTimeDeaths', s.allTimeDeaths);
       }
       if (s.bossKills !== undefined) {
+        stateRef.current.bossKills = s.bossKills;
         setBossKills(s.bossKills);
         saveToStorage('bossKills', s.bossKills);
       }

@@ -68,6 +68,7 @@ export default function Controller() {
   }, [settings.preset, handleColorChange]);
 
   const hasLoadedCloudRef = React.useRef(false);
+  const lastLocalMutationRef = React.useRef(0);
   const lastCloudStateRef = React.useRef({
     deaths: null,
     sessionDeaths: null,
@@ -86,9 +87,21 @@ export default function Controller() {
 
     const syncFromCloud = async () => {
       try {
+        // Skip polling sync if a local mutation was made recently (prevents flicker)
+        const msSinceLocal = Date.now() - lastLocalMutationRef.current;
+        if (hasLoadedCloudRef.current && msSinceLocal < 3000) return;
+
         const cloudState = await loadCloudStateByKey(streamerKey);
         if (cloudState) {
           const prev = lastCloudStateRef.current;
+          // Ignore stale cloud revision
+          if (cloudState.revision && prev.revision && cloudState.revision < prev.revision) {
+            return;
+          }
+          if (cloudState.revision && counter.revision && cloudState.revision < counter.revision) {
+            return;
+          }
+
           const isDifferent =
             prev.deaths !== cloudState.deaths ||
             prev.sessionDeaths !== cloudState.sessionDeaths ||
@@ -162,6 +175,14 @@ export default function Controller() {
         (payload) => {
           const row = payload.new;
           if (row) {
+            // Skip Realtime updates if a local mutation was made recently (prevents flicker)
+            const msSinceLocal = Date.now() - lastLocalMutationRef.current;
+            if (msSinceLocal < 3000) return;
+
+            const incomingRev = Number(row.revision || 0);
+            const currentRev = Number(lastCloudStateRef.current.revision || 0);
+            if (incomingRev > 0 && currentRev > 0 && incomingRev < currentRev) return;
+
             lastCloudStateRef.current = {
               deaths: row.deaths,
               sessionDeaths: row.session_deaths,
@@ -200,107 +221,131 @@ export default function Controller() {
     };
   }, [user, streamerKey, counter, settings, shortcuts]);
 
+  // Helper to reconcile authoritative server response into both ref and counter state
+  const handleMutationResponse = useCallback((res) => {
+    if (res && res.revision) {
+      lastCloudStateRef.current = {
+        ...lastCloudStateRef.current,
+        deaths: res.deaths,
+        sessionDeaths: res.sessionDeaths,
+        allTimeDeaths: res.allTimeDeaths,
+        bossKills: res.bossKills,
+        revision: res.revision,
+      };
+      counter.loadFullState(res);
+    }
+  }, [counter]);
+
   // ─── Wrapped Atomic Counter Actions ───
   // Optimistically updates local UI and dispatches atomic mutation to backend.
   // Reconciles with authoritative server state upon response.
   const handleAddDeath = useCallback(async () => {
+    lastLocalMutationRef.current = Date.now();
     counter.addDeath();
     if (!streamerKey || !user) return;
     try {
       const res = await applyStreamerMutation('add', 1, { streamerKey });
-      if (res && res.revision) counter.loadFullState(res);
+      handleMutationResponse(res);
     } catch (err) {
       console.warn('Atomic add death error:', err);
     }
-  }, [counter, streamerKey, user]);
+  }, [counter, streamerKey, user, handleMutationResponse]);
 
   const handleUndoDeath = useCallback(async () => {
+    lastLocalMutationRef.current = Date.now();
     counter.undoDeath();
     if (!streamerKey || !user) return;
     try {
       const res = await applyStreamerMutation('undo', 1, { streamerKey });
-      if (res && res.revision) counter.loadFullState(res);
+      handleMutationResponse(res);
     } catch (err) {
       console.warn('Atomic undo death error:', err);
     }
-  }, [counter, streamerKey, user]);
+  }, [counter, streamerKey, user, handleMutationResponse]);
 
   const handleResetDeaths = useCallback(async () => {
+    lastLocalMutationRef.current = Date.now();
     counter.resetDeaths();
     if (!streamerKey || !user) return;
     try {
       const res = await applyStreamerMutation('resetSession', 0, { streamerKey, extra: { target: 'session' } });
-      if (res && res.revision) counter.loadFullState(res);
+      handleMutationResponse(res);
     } catch (err) {
       console.warn('Atomic reset deaths error:', err);
     }
-  }, [counter, streamerKey, user]);
+  }, [counter, streamerKey, user, handleMutationResponse]);
 
   const handleResetSession = useCallback(async () => {
+    lastLocalMutationRef.current = Date.now();
     counter.resetSession();
     if (!streamerKey || !user) return;
     try {
       const res = await applyStreamerMutation('resetSession', 0, { streamerKey, extra: { target: 'session' } });
-      if (res && res.revision) counter.loadFullState(res);
+      handleMutationResponse(res);
     } catch (err) {
       console.warn('Atomic reset session error:', err);
     }
-  }, [counter, streamerKey, user]);
+  }, [counter, streamerKey, user, handleMutationResponse]);
 
   const handleSetDeathCount = useCallback(async (val) => {
+    lastLocalMutationRef.current = Date.now();
     counter.setDeathCount(val);
     if (!streamerKey || !user) return;
     try {
       const res = await applyStreamerMutation('setDeath', val, { streamerKey });
-      if (res && res.revision) counter.loadFullState(res);
+      handleMutationResponse(res);
     } catch (err) {
       console.warn('Atomic set death error:', err);
     }
-  }, [counter, streamerKey, user]);
+  }, [counter, streamerKey, user, handleMutationResponse]);
 
   const handleAddBossKill = useCallback(async () => {
+    lastLocalMutationRef.current = Date.now();
     counter.addBossKill();
     if (!streamerKey || !user) return;
     try {
       const res = await applyStreamerMutation('addBossKill', 1, { streamerKey });
-      if (res && res.revision) counter.loadFullState(res);
+      handleMutationResponse(res);
     } catch (err) {
       console.warn('Atomic add boss kill error:', err);
     }
-  }, [counter, streamerKey, user]);
+  }, [counter, streamerKey, user, handleMutationResponse]);
 
   const handleUndoBossKill = useCallback(async () => {
+    lastLocalMutationRef.current = Date.now();
     counter.undoBossKill();
     if (!streamerKey || !user) return;
     try {
       const res = await applyStreamerMutation('undoBossKill', 1, { streamerKey });
-      if (res && res.revision) counter.loadFullState(res);
+      handleMutationResponse(res);
     } catch (err) {
       console.warn('Atomic undo boss kill error:', err);
     }
-  }, [counter, streamerKey, user]);
+  }, [counter, streamerKey, user, handleMutationResponse]);
 
   const handleResetBossKills = useCallback(async () => {
+    lastLocalMutationRef.current = Date.now();
     counter.resetBossKills();
     if (!streamerKey || !user) return;
     try {
       const res = await applyStreamerMutation('setBossKill', 0, { streamerKey });
-      if (res && res.revision) counter.loadFullState(res);
+      handleMutationResponse(res);
     } catch (err) {
       console.warn('Atomic reset boss kills error:', err);
     }
-  }, [counter, streamerKey, user]);
+  }, [counter, streamerKey, user, handleMutationResponse]);
 
   const handleSetBossKillCount = useCallback(async (val) => {
+    lastLocalMutationRef.current = Date.now();
     counter.setBossKillCount(val);
     if (!streamerKey || !user) return;
     try {
       const res = await applyStreamerMutation('setBossKill', val, { streamerKey });
-      if (res && res.revision) counter.loadFullState(res);
+      handleMutationResponse(res);
     } catch (err) {
       console.warn('Atomic set boss kill count error:', err);
     }
-  }, [counter, streamerKey, user]);
+  }, [counter, streamerKey, user, handleMutationResponse]);
 
   // 2. Configuration Sync to Supabase ONLY when streamer updates preferences
   // Strictly separates configuration from counters: NEVER writes or overwrites counter values

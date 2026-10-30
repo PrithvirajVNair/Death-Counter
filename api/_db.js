@@ -1,5 +1,21 @@
 import fs from 'fs';
 import path from 'path';
+import { createClient } from '@supabase/supabase-js';
+
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+
+let supabaseClient = null;
+function getSupabase() {
+  if (!supabaseClient && SUPABASE_URL && SUPABASE_KEY) {
+    try {
+      supabaseClient = createClient(SUPABASE_URL, SUPABASE_KEY, {
+        auth: { persistSession: false },
+      });
+    } catch {}
+  }
+  return supabaseClient;
+}
 
 const TMP_FILE_PATH = path.join('/tmp', 'death-counter-data.json');
 
@@ -70,6 +86,25 @@ export function getState(channel = '') {
   return channelMap.get(channel);
 }
 
+function saveToSupabaseAsync(channel, state) {
+  if (!channel) return;
+  const sb = getSupabase();
+  if (!sb) return;
+  try {
+    sb.from('streamer_states').upsert({
+      streamer_key: channel,
+      deaths: state.deaths ?? 0,
+      session_deaths: state.sessionDeaths ?? 0,
+      all_time_deaths: state.allTimeDeaths ?? 0,
+      boss_kills: state.bossKills ?? 0,
+      settings: state.settings || {},
+      shortcuts: state.shortcuts || {},
+      last_updated: state.lastUpdated || Date.now(),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'streamer_key' }).then(() => {}).catch(() => {});
+  } catch {}
+}
+
 export function updateState(partial = {}, channel = '') {
   if (!channel) {
     return { ...DEFAULT_STATE, ...partial };
@@ -101,6 +136,7 @@ export function updateState(partial = {}, channel = '') {
   };
 
   channelMap.set(channel, next);
+  saveToSupabaseAsync(channel, next);
   return next;
 }
 
@@ -169,6 +205,7 @@ export function applyAction(rawAction, value, extra = {}, channel = '') {
 
   state.lastUpdated = Math.max(now, state.lastUpdated || 0);
   channelMap.set(channel, state);
+  saveToSupabaseAsync(channel, state);
 
   return { state, normAction };
 }
@@ -189,5 +226,6 @@ export function resetState(target = 'session', channel = '') {
 
   state.lastUpdated = Date.now();
   channelMap.set(channel, state);
+  saveToSupabaseAsync(channel, state);
   return state;
 }

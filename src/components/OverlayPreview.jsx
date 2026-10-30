@@ -14,6 +14,7 @@ export default function OverlayPreview({
   bossAttempts,
   transparentBg,
   onToggleTransparent,
+  streamerKey,
 }) {
   const [previewMode, setPreviewMode] = useState('deaths'); // 'deaths' | 'boss-slain' | 'both'
 
@@ -31,10 +32,11 @@ export default function OverlayPreview({
   const currentPreviewObsUrl = useMemo(() => {
     const preset = settings?.preset || 'classic-rune';
     const colorParam = settings?.goldColor ? `&goldColor=${encodeURIComponent(settings.goldColor)}` : '';
-    if (previewMode === 'boss-slain') return `${origin}/overlay?preset=${preset}&mode=boss-slain${colorParam}`;
-    if (previewMode === 'both') return `${origin}/overlay?preset=${preset}&bossKills=true${colorParam}`;
-    return `${origin}/overlay?preset=${preset}${colorParam}`;
-  }, [origin, settings?.preset, settings?.goldColor, previewMode]);
+    const keyParam = streamerKey ? `&key=${encodeURIComponent(streamerKey)}` : '';
+    if (previewMode === 'boss-slain') return `${origin}/overlay?preset=${preset}&mode=boss-slain${colorParam}${keyParam}`;
+    if (previewMode === 'both') return `${origin}/overlay?preset=${preset}&bossKills=true${colorParam}${keyParam}`;
+    return `${origin}/overlay?preset=${preset}${colorParam}${keyParam}`;
+  }, [origin, settings?.preset, settings?.goldColor, previewMode, streamerKey]);
 
   const handleCopyCurrentUrl = () => {
     navigator.clipboard.writeText(currentPreviewObsUrl).then(

@@ -18,6 +18,7 @@ export default function CounterControls({
   sessionCountVisible,
   preset = 'classic-rune',
   goldColor,
+  streamerKey,
 }) {
   const [showConfirmDeath, setShowConfirmDeath] = useState(false);
   const [showConfirmBoss, setShowConfirmBoss] = useState(false);
@@ -32,8 +33,9 @@ export default function CounterControls({
     ? window.location.origin
     : 'https://soulgamedc-rosy.vercel.app';
   const colorParam = goldColor ? `&goldColor=${encodeURIComponent(goldColor)}` : '';
-  const bossOverlayUrl = `${origin}/overlay?preset=${preset}&mode=boss-slain${colorParam}`;
-  const deathOverlayUrl = `${origin}/overlay?preset=${preset}${colorParam}`;
+  const keyParam = streamerKey ? `&key=${encodeURIComponent(streamerKey)}` : '';
+  const bossOverlayUrl = `${origin}/overlay?preset=${preset}&mode=boss-slain${colorParam}${keyParam}`;
+  const deathOverlayUrl = `${origin}/overlay?preset=${preset}${colorParam}${keyParam}`;
 
   const handleCopyBossUrl = () => {
     navigator.clipboard.writeText(bossOverlayUrl).then(

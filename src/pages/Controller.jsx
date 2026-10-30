@@ -1,16 +1,23 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useDeathCounter } from '../hooks/useDeathCounter';
+import { useAuth } from '../context/AuthContext';
+import AuthModal from '../components/AuthModal';
 import CounterControls from '../components/CounterControls';
 import OverlayPreview from '../components/OverlayPreview';
 import PresetSelector from '../components/PresetSelector';
 import CustomizationPanel from '../components/CustomizationPanel';
 import ToastContainer, { showToast } from '../components/Toast';
 import { DEFAULT_PRESET_COLORS } from '../lib/defaults';
+import { Key, Copy, Check, LogOut, Radio } from 'lucide-react';
 import '../styles/controller.css';
+import '../styles/auth.css';
 
 export default function Controller() {
   const counter = useDeathCounter();
+  const { user, loading: authLoading, streamerKey, signOut, saveCloudState } = useAuth();
   const [transparentPreview, setTransparentPreview] = useState(false);
+  const [copiedKey, setCopiedKey] = useState(false);
+  const [copiedOverlay, setCopiedOverlay] = useState(false);
 
   const {
     deaths, sessionDeaths, allTimeDeaths, bossKills, settings, shortcuts, deathAnim, bossSlainAnim,
@@ -126,6 +133,41 @@ export default function Controller() {
     showToast(`Reset ${currentPreset.replace(/-/g, ' ')} color to default`);
   }, [settings.preset, handleColorChange]);
 
+  // Sync state to Supabase cloud when stats update
+  useEffect(() => {
+    if (user && streamerKey) {
+      saveCloudState({
+        deaths,
+        sessionDeaths,
+        allTimeDeaths,
+        bossKills,
+        settings,
+        shortcuts,
+        lastUpdated: Date.now(),
+      });
+    }
+  }, [deaths, sessionDeaths, allTimeDeaths, bossKills, settings, shortcuts, user, streamerKey, saveCloudState]);
+
+  // Auth Gate: Require sign in to use counter
+  if (authLoading) {
+    return (
+      <div className="controller-page" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ color: 'var(--color-gold)', fontFamily: 'Georgia, serif', fontSize: '18px', letterSpacing: '1px' }}>
+          Loading Souls Chronicle...
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="controller-page" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Embers count={12} />
+        <AuthModal isOpen={true} />
+      </div>
+    );
+  }
+
   return (
     <div className="controller-page">
       {/* Header */}
@@ -135,12 +177,65 @@ export default function Controller() {
           <p className="controller-header__subtitle">Souls Game Chronicle</p>
         </div>
         <div className="controller-header__right">
+          {user && (
+            <div className="user-profile-bar">
+              {user.user_metadata?.avatar_url ? (
+                <img src={user.user_metadata.avatar_url} alt="Avatar" className="user-avatar" />
+              ) : (
+                <div className="user-avatar-placeholder">
+                  {(user.user_metadata?.full_name || user.email || 'U')[0].toUpperCase()}
+                </div>
+              )}
+              <span style={{ fontWeight: 600, color: 'var(--color-gold)' }}>
+                {user.user_metadata?.full_name || user.email?.split('@')[0]}
+              </span>
+              <div className="user-streamer-key" title="Your unique Streamer Key">
+                <Key size={12} color="#C8A65D" />
+                <span>{streamerKey}</span>
+                <button
+                  type="button"
+                  style={{ background: 'none', border: 'none', color: '#C8A65D', cursor: 'pointer', padding: '0 2px' }}
+                  onClick={() => {
+                    navigator.clipboard.writeText(streamerKey);
+                    setCopiedKey(true);
+                    showToast('Copied Streamer Key to clipboard!');
+                    setTimeout(() => setCopiedKey(false), 2000);
+                  }}
+                  title="Copy Key"
+                >
+                  {copiedKey ? <Check size={12} color="#4ade80" /> : <Copy size={12} />}
+                </button>
+              </div>
+              <button
+                type="button"
+                className="btn btn--sm btn--secondary"
+                style={{ fontSize: '11px', padding: '3px 8px' }}
+                onClick={() => {
+                  const overlayUrl = `${window.location.origin}/overlay?key=${encodeURIComponent(streamerKey)}`;
+                  navigator.clipboard.writeText(overlayUrl);
+                  setCopiedOverlay(true);
+                  showToast('Copied Private OBS Overlay URL!');
+                  setTimeout(() => setCopiedOverlay(false), 2000);
+                }}
+              >
+                {copiedOverlay ? '✓ URL Copied' : 'Copy OBS Link'}
+              </button>
+              <button
+                type="button"
+                className="btn-signout"
+                onClick={signOut}
+                title="Sign Out"
+              >
+                <LogOut size={12} />
+              </button>
+            </div>
+          )}
           <span className="controller-header__preset">
             {settings.preset.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
           </span>
           <span className="sync-indicator sync-indicator--ok">
             <span className="sync-indicator__dot" />
-            Live OBS Sync Ready
+            Cloud Synced
           </span>
         </div>
       </header>
@@ -167,6 +262,7 @@ export default function Controller() {
             sessionCountVisible={settings.sessionCountVisible}
             preset={settings.preset}
             goldColor={settings.goldColor}
+            streamerKey={streamerKey}
           />
 
           <OverlayPreview
@@ -178,6 +274,7 @@ export default function Controller() {
             sessionDeaths={sessionDeaths}
             transparentBg={transparentPreview}
             onToggleTransparent={setTransparentPreview}
+            streamerKey={streamerKey}
           />
 
           <PresetSelector

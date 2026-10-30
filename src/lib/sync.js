@@ -107,20 +107,21 @@ export function broadcastUpdate(type, payload) {
     } catch {}
   }
 
-  // 4. Remote Cloud sync: ONLY if a private channel/room is explicitly specified
+  // 4. Remote Cloud sync: ONLY if a private channel/room/streamerKey is explicitly specified
   if (typeof window !== 'undefined') {
     const params = new URLSearchParams(window.location.search);
-    const channel = params.get('channel') || params.get('room');
+    const channel = params.get('key') || params.get('channel') || params.get('streamerKey') || params.get('room');
     if (channel) {
       try {
         const apiPayload = {
           type,
           channel,
+          key: channel,
           ...payload,
           triggerAnim: payload?.triggerAnim || false,
           lastUpdated: payload?.lastUpdated || Date.now(),
         };
-        fetch(`/api/state?channel=${encodeURIComponent(channel)}`, {
+        fetch(`/api/state?key=${encodeURIComponent(channel)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(apiPayload),
@@ -147,13 +148,13 @@ export async function fetchServerState() {
     } catch {}
   }
 
-  // 2. Cloud Server Sync: ONLY if a specific channel is requested in URL
+  // 2. Cloud Server Sync: ONLY if a specific channel/key is requested in URL
   if (typeof window !== 'undefined') {
     const params = new URLSearchParams(window.location.search);
-    const channel = params.get('channel') || params.get('room');
+    const channel = params.get('key') || params.get('channel') || params.get('streamerKey') || params.get('room');
     if (channel) {
       try {
-        const res = await fetch(`/api/state?channel=${encodeURIComponent(channel)}&_t=${Date.now()}`, {
+        const res = await fetch(`/api/state?key=${encodeURIComponent(channel)}&_t=${Date.now()}`, {
           cache: 'no-store',
           headers: {
             'Cache-Control': 'no-cache, no-store, must-revalidate',

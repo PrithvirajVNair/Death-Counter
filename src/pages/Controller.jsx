@@ -332,6 +332,8 @@ export default function Controller() {
       shortcuts,
       bosses,
       currentBoss,
+    }).catch((err) => {
+      console.warn("Failed to persist cloud configuration via RPC:", err);
     });
   }, [settings, shortcuts, bosses, currentBoss, user, streamerKey]);
 

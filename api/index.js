@@ -30,13 +30,22 @@ const MAX_BODY_BYTES = 65536; // 64 KB limit
 // ─── Distributed / Sliding Window Rate Limiting (Upstash Redis + Local Fallback) ───
 const rateLimitMap = globalThis.__SDC_RATE_LIMITS__ || (globalThis.__SDC_RATE_LIMITS__ = new Map());
 
-async function checkRateLimit(key, limit, windowSeconds) {
+/**
+ * Distributed rate limiter with atomic Redis operations and local memory fallback.
+ * - Under Redis: Pipeline executes [INCR, key] and [TTL, key].
+ *   EXPIRE is set strictly when key is created (count === 1) or TTL is unset (< 0).
+ *   Blocked requests increment or remain rejected but NEVER extend their own lockout.
+ * - Under local fallback: Sliding window tracks window start timestamp without extending on blocked requests.
+ *   Clearly returns distributed: false to never claim distributed protection when running locally.
+ */
+export async function checkRateLimit(key, limit, windowSeconds) {
   const redisUrl = process.env.UPSTASH_REDIS_REST_URL;
   const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
 
   // 1. Distributed Rate Limiting via Upstash Redis REST if configured
   if (redisUrl && redisToken) {
     try {
+      const redisKey = `sdc:rl:${key}`;
       const pipelineUrl = `${redisUrl.replace(/\/$/, '')}/pipeline`;
       const res = await fetch(pipelineUrl, {
         method: 'POST',
@@ -45,25 +54,37 @@ async function checkRateLimit(key, limit, windowSeconds) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify([
-          ['INCR', `sdc:rl:${key}`],
-          ['EXPIRE', `sdc:rl:${key}`, windowSeconds],
+          ['INCR', redisKey],
+          ['TTL', redisKey],
         ]),
       });
 
       if (res.ok) {
         const results = await res.json();
-        const currentCount = results[0]?.result || 1;
-        if (currentCount > limit) {
-          return { allowed: false, remaining: 0, resetSeconds: windowSeconds, distributed: true };
+        const currentCount = Number(results[0]?.result) || 1;
+        const ttl = Number(results[1]?.result);
+
+        // Set expiry ONLY when key is freshly created or missing TTL.
+        // Blocked requests do NOT call EXPIRE, preventing indefinite lockout extension.
+        if (currentCount === 1 || ttl < 0) {
+          await fetch(`${redisUrl.replace(/\/$/, '')}/expire/${encodeURIComponent(redisKey)}/${windowSeconds}`, {
+            headers: { Authorization: `Bearer ${redisToken}` },
+          }).catch(() => {});
         }
-        return { allowed: true, remaining: Math.max(0, limit - currentCount), resetSeconds: windowSeconds, distributed: true };
+
+        const resetSeconds = Math.max(1, ttl > 0 ? ttl : windowSeconds);
+
+        if (currentCount > limit) {
+          return { allowed: false, remaining: 0, resetSeconds, distributed: true };
+        }
+        return { allowed: true, remaining: Math.max(0, limit - currentCount), resetSeconds, distributed: true };
       }
     } catch (e) {
       console.warn('[RateLimit] Upstash Redis request failed, falling back to local memory:', e.message);
     }
   }
 
-  // 2. Local in-memory sliding window fallback
+  // 2. Local in-memory sliding window fallback (active only when Redis is unavailable)
   const now = Date.now();
   const windowMs = windowSeconds * 1000;
   let record = rateLimitMap.get(key);
@@ -75,6 +96,7 @@ async function checkRateLimit(key, limit, windowSeconds) {
   }
 
   record.count += 1;
+  // Window reset time is anchored to window start and does not advance on blocked requests
   const resetSeconds = Math.max(1, Math.ceil((record.startTime + windowMs - now) / 1000));
 
   if (record.count > limit) {
@@ -296,17 +318,79 @@ export default async function handler(req, res) {
     }
 
     // ─── Authentication & Authorization Verification ───
-    // Priority 1: Check Streamer Supabase JWT in Authorization header
     const authHeader = req.headers['authorization'] || '';
-    const reqToken = (req.headers['x-moderator-token'] || req.headers['x-companion-token'] || body.token || queryToken || '').trim();
+    const companionHeader = (req.headers['x-companion-token'] || '').trim();
+    const moderatorHeader = (req.headers['x-moderator-token'] || '').trim();
+    const legacyBodyToken = (body.token ? String(body.token).trim() : '');
+    const legacyQueryToken = (queryToken || '').trim();
     const explicitKey = (body.key || body.streamerKey || body.channel || queryKey || '').trim();
 
     let authorizedStreamerKey = null;
-    let authType = null; // 'streamer' | 'moderator'
+    let authType = null; // 'streamer' | 'companion' | 'moderator'
     let moderatorPermissions = null;
+    let activeToken = '';
 
-    if (authHeader && authHeader.toLowerCase().startsWith('bearer ')) {
-      // Streamer Authentication via verified Supabase JWT
+    // 1. Companion Token Authentication via X-Companion-Token
+    if (companionHeader) {
+      activeToken = companionHeader;
+      const tokenResult = await validateModeratorToken(companionHeader);
+      if (!tokenResult.valid) {
+        return res.status(401).json({
+          success: false,
+          ok: false,
+          error: { code: 'INVALID_TOKEN', message: `Companion token is ${tokenResult.reason}.` },
+        });
+      }
+
+      if (explicitKey && explicitKey !== tokenResult.streamerKey) {
+        return res.status(403).json({
+          success: false,
+          ok: false,
+          error: { code: 'FORBIDDEN', message: 'Supplied companion token does not match the requested streamer.' },
+        });
+      }
+
+      authorizedStreamerKey = tokenResult.streamerKey;
+      authType = 'companion';
+      moderatorPermissions = tokenResult.permissions;
+    }
+    // 2. Remote Moderator Token Authentication via X-Moderator-Token (or legacy body/query fallback)
+    else if (moderatorHeader || legacyBodyToken || legacyQueryToken) {
+      activeToken = moderatorHeader || legacyBodyToken || legacyQueryToken;
+      const tokenResult = await validateModeratorToken(activeToken);
+      if (!tokenResult.valid) {
+        return res.status(401).json({
+          success: false,
+          ok: false,
+          error: { code: 'INVALID_TOKEN', message: `Remote token is ${tokenResult.reason}.` },
+        });
+      }
+
+      if (explicitKey && explicitKey !== tokenResult.streamerKey) {
+        return res.status(403).json({
+          success: false,
+          ok: false,
+          error: { code: 'FORBIDDEN', message: 'Supplied token does not match the requested streamer.' },
+        });
+      }
+
+      authorizedStreamerKey = tokenResult.streamerKey;
+      authType = 'moderator';
+      moderatorPermissions = tokenResult.permissions;
+    }
+    // 3. Streamer Authentication via verified Supabase JWT in Authorization Bearer
+    else if (authHeader && authHeader.toLowerCase().startsWith('bearer ')) {
+      const rawBearer = authHeader.replace(/^Bearer\s+/i, '').trim();
+
+      // Companion and moderator tokens mistakenly supplied as Bearer JWT must NEVER be accepted as streamer JWT
+      if (rawBearer.startsWith('scomp_') || rawBearer.startsWith('rmt_')) {
+        return res.status(401).json({
+          success: false,
+          ok: false,
+          error: { code: 'INVALID_CREDENTIALS', message: 'Companion and moderator tokens must not be supplied as Bearer JWT.' },
+        });
+      }
+
       const verifiedStreamer = await verifyStreamerAuth(authHeader);
       if (!verifiedStreamer) {
         return res.status(401).json({
@@ -347,30 +431,8 @@ export default async function handler(req, res) {
           ...companionData,
         });
       }
-    } else if (reqToken) {
-      // Moderator / Companion Authentication via Token
-      const tokenResult = await validateModeratorToken(reqToken);
-      if (!tokenResult.valid) {
-        return res.status(401).json({
-          success: false,
-          ok: false,
-          error: { code: 'INVALID_TOKEN', message: `Remote token is ${tokenResult.reason}.` },
-        });
-      }
-
-      if (explicitKey && explicitKey !== tokenResult.streamerKey) {
-        return res.status(403).json({
-          success: false,
-          ok: false,
-          error: { code: 'FORBIDDEN', message: 'Supplied token does not match the requested streamer.' },
-        });
-      }
-
-      authorizedStreamerKey = tokenResult.streamerKey;
-      authType = 'moderator';
-      moderatorPermissions = tokenResult.permissions;
     } else {
-      // STRICT: Neither JWT nor Moderator Token provided. Streamer key alone is NOT sufficient!
+      // STRICT: Neither JWT nor Moderator/Companion Token provided. Streamer key alone is NOT sufficient!
       return res.status(401).json({
         success: false,
         ok: false,
@@ -384,7 +446,7 @@ export default async function handler(req, res) {
     // Rate Limiting per Streamer / Token
     const rateLimitKey = authType === 'streamer'
       ? `streamer:${authorizedStreamerKey}`
-      : `mod:${reqToken.slice(0, 16)}`;
+      : `token:${activeToken.slice(0, 16)}`;
     const limitMax = authType === 'streamer' ? 120 : 60;
     const rl = await checkRateLimit(rateLimitKey, limitMax, 60);
 
@@ -408,8 +470,8 @@ export default async function handler(req, res) {
         });
       }
 
-      // Check Moderator Permissions for Action
-      if (authType === 'moderator' && moderatorPermissions) {
+      // Check Moderator / Companion Permissions for Action
+      if ((authType === 'moderator' || authType === 'companion') && moderatorPermissions) {
         if ((rawAction === 'add' || rawAction === 'addDeath' || rawAction === 'undo' || rawAction === 'undoDeath') &&
             !moderatorPermissions.can_increment_deaths) {
           return res.status(403).json({
@@ -476,7 +538,7 @@ export default async function handler(req, res) {
         body.value,
         body,
         authorizedStreamerKey,
-        authType === 'moderator' ? reqToken : null,
+        authType === 'streamer' ? null : activeToken,
         operationId
       );
 
@@ -506,7 +568,7 @@ export default async function handler(req, res) {
         });
       }
 
-      if (authType === 'moderator' && moderatorPermissions) {
+      if ((authType === 'moderator' || authType === 'companion') && moderatorPermissions) {
         if (target === 'session' && !moderatorPermissions.can_reset_session) {
           return res.status(403).json({
             success: false,
@@ -529,7 +591,7 @@ export default async function handler(req, res) {
       const updated = await resetState(
         target,
         authorizedStreamerKey,
-        authType === 'moderator' ? reqToken : null,
+        authType === 'streamer' ? null : activeToken,
         operationId
       );
 

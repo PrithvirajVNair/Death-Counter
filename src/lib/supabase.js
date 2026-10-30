@@ -169,44 +169,25 @@ export async function saveCloudConfig(user, config) {
   if (!user || !config) return null;
   const streamerKey = getStreamerKey(user);
 
-  try {
-    // 1. Try atomic configuration RPC first
-    const { data: rpcData, error: rpcErr } = await supabase.rpc('update_streamer_config', {
-      p_streamer_key: streamerKey,
-      p_settings: config.settings || null,
-      p_shortcuts: config.shortcuts || null,
-      p_bosses: config.bosses !== undefined ? config.bosses : null,
-      p_current_boss: config.currentBoss !== undefined ? config.currentBoss : null,
-      p_display_name: user.user_metadata?.full_name || user.email?.split("@")[0] || null,
-    });
+  // Configuration persistence strictly uses dedicated RPC so revision increments and row locking are preserved
+  const { data: rpcData, error: rpcErr } = await supabase.rpc('update_streamer_config', {
+    p_streamer_key: streamerKey,
+    p_settings: config.settings || null,
+    p_shortcuts: config.shortcuts || null,
+    p_bosses: config.bosses !== undefined ? config.bosses : null,
+    p_current_boss: config.currentBoss !== undefined ? config.currentBoss : null,
+    p_display_name: user.user_metadata?.full_name || user.email?.split("@")[0] || null,
+  });
 
-    if (!rpcErr && rpcData) {
-      return rpcData;
-    }
-  } catch {}
-
-  // 2. Direct column update fallback for permitted configuration columns only
-  try {
-    const configPayload = {
-      updated_at: new Date().toISOString(),
-    };
-    if (config.settings !== undefined) configPayload.settings = config.settings;
-    if (config.shortcuts !== undefined) configPayload.shortcuts = config.shortcuts;
-    if (config.bosses !== undefined) configPayload.bosses = config.bosses;
-    if (config.currentBoss !== undefined) configPayload.current_boss = config.currentBoss;
-
-    const { data, error } = await supabase
-      .from("streamer_states")
-      .update(configPayload)
-      .eq("user_id", user.id)
-      .select('revision, last_updated')
-      .maybeSingle();
-
-    if (!error) return data;
-  } catch (err) {
-    console.warn("Supabase saveCloudConfig error:", err);
+  if (rpcErr) {
+    console.error("Configuration RPC error in saveCloudConfig:", rpcErr);
+    const err = new Error(`Configuration update RPC failed: ${rpcErr.message || rpcErr}`);
+    err.code = 'CONFIG_RPC_FAILED';
+    err.originalError = rpcErr;
+    throw err;
   }
-  return null;
+
+  return rpcData;
 }
 
 /**
@@ -469,10 +450,8 @@ export async function validateRemoteToken(token) {
       method: 'POST',
       headers: {
         'Accept': 'application/json',
-        'Content-Type': 'application/json',
         'X-Moderator-Token': cleanToken,
       },
-      body: JSON.stringify({ token: cleanToken }),
     });
     const data = await res.json();
 
@@ -524,13 +503,8 @@ export async function updateStreamerStateRemote(streamerKey, action, extra = {},
       body: JSON.stringify({
         action,
         key: streamerKey,
-        token: token || undefined,
         value: extra.value,
         target: extra.target || (isReset ? 'session' : undefined),
-        deaths: extra.deaths,
-        sessionDeaths: extra.sessionDeaths,
-        allTimeDeaths: extra.allTimeDeaths,
-        bossKills: extra.bossKills,
         operationId,
       }),
     });

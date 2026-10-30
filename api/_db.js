@@ -82,6 +82,15 @@ export const DEFAULT_STATE = {
   lastUpdated: 0,
 };
 
+export const COMPANION_PERMISSIONS = Object.freeze({
+  can_increment_deaths: true,
+  can_increment_bosses: true,
+  can_set_deaths: true,
+  can_set_bosses: true,
+  can_reset_session: true,
+  can_reset_all: false,
+});
+
 // Non-authoritative in-memory read cache (Never used for production writes)
 const channelMap = globalThis.__DEATH_COUNTER_CHANNELS__ || (globalThis.__DEATH_COUNTER_CHANNELS__ = new Map());
 
@@ -273,6 +282,9 @@ export async function validateModeratorToken(rawToken) {
           expiresAt: null,
         };
       }
+      if (clean === 'revoked-companion-token') {
+        return { valid: false, reason: 'revoked', streamerName: 'Test Streamer' };
+      }
       if (clean.startsWith('scomp_')) {
         return {
           valid: true,
@@ -280,14 +292,7 @@ export async function validateModeratorToken(rawToken) {
           streamerKey: 'streamer-comp-test-key',
           streamerName: 'Test Streamer',
           label: 'Desktop Companion',
-          permissions: {
-            can_increment_deaths: true,
-            can_increment_bosses: true,
-            can_set_deaths: true,
-            can_set_bosses: true,
-            can_reset_session: true,
-            can_reset_all: true,
-          },
+          permissions: { ...COMPANION_PERMISSIONS },
           expiresAt: null,
         };
       }
@@ -385,14 +390,7 @@ export async function createCompanionToken(streamerKey, userId) {
       streamer_name: 'Streamer Companion',
       label: 'Desktop Companion',
       token_hash: tokenHash,
-      permissions: {
-        can_increment_deaths: true,
-        can_increment_bosses: true,
-        can_set_deaths: true,
-        can_set_bosses: true,
-        can_reset_session: true,
-        can_reset_all: false,
-      },
+      permissions: { ...COMPANION_PERMISSIONS },
       expires_at: null,
       is_revoked: false,
     });
@@ -404,16 +402,12 @@ export async function createCompanionToken(streamerKey, userId) {
     }
   }
 
-  const defaultPerms = {
-    can_increment_deaths: true,
-    can_increment_bosses: true,
-    can_set_deaths: true,
-    can_set_bosses: true,
-    can_reset_session: true,
-    can_reset_all: true,
+  return {
+    token: rawToken,
+    companionToken: rawToken,
+    streamerKey,
+    permissions: { ...COMPANION_PERMISSIONS },
   };
-
-  return { token: rawToken, companionToken: rawToken, streamerKey, permissions: defaultPerms };
 }
 
 /**

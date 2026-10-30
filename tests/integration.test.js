@@ -2,7 +2,7 @@ process.env.NODE_ENV = 'test';
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import handler from '../api/index.js';
+import handler, { checkRateLimit } from '../api/index.js';
 import {
   getSupabase,
   getState,
@@ -10,7 +10,9 @@ import {
   updateState,
   createCompanionToken,
   validateModeratorToken,
+  COMPANION_PERMISSIONS,
 } from '../api/_db.js';
+import { saveCloudConfig, supabase } from '../src/lib/supabase.js';
 
 function createMockReqRes({ method = 'GET', url = '/', body = null, headers = {} } = {}) {
   const req = {
@@ -150,7 +152,7 @@ describe('SDC Integration & Architecture Verification Suite', () => {
     assert.equal(result.permissions.can_increment_deaths, true);
     assert.equal(result.permissions.can_increment_bosses, true);
     assert.equal(result.permissions.can_reset_session, true);
-    assert.equal(result.permissions.can_reset_all, true);
+    assert.equal(result.permissions.can_reset_all, false);
 
     // Verify token can be validated
     const validation = await validateModeratorToken(result.token);
@@ -206,5 +208,237 @@ describe('SDC Integration & Architecture Verification Suite', () => {
     assert.ifError(error);
     assert.ok(data);
     assert.ok(data.revision >= 1);
+  });
+
+  // ─── 7. Final Mandatory Regression Suite (Items 1-10) ───
+  describe('Mandatory Release-Blocker Regression Tests', () => {
+    // 1. Streamer JWT mutation succeeds
+    it('1. Streamer JWT mutation succeeds', async () => {
+      const { req, res } = createMockReqRes({
+        method: 'POST',
+        url: '/api/action',
+        headers: { authorization: 'Bearer valid-streamer-jwt' },
+        body: { action: 'add', operationId: 'op_reg_streamer_jwt_succ_1' },
+      });
+      await handler(req, res);
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.success, true);
+      assert.equal(res.body.action, 'add');
+    });
+
+    // 2. Invalid streamer JWT is rejected
+    it('2. Invalid streamer JWT is rejected', async () => {
+      const { req, res } = createMockReqRes({
+        method: 'POST',
+        url: '/api/action',
+        headers: { authorization: 'Bearer invalid-jwt' },
+        body: { action: 'add', operationId: 'op_reg_streamer_jwt_fail_2' },
+      });
+      await handler(req, res);
+      assert.equal(res.statusCode, 401);
+      assert.equal(res.body.error.code, 'INVALID_CREDENTIALS');
+    });
+
+    // 3. Moderator token mutation succeeds
+    it('3. Moderator token mutation succeeds', async () => {
+      const { req, res } = createMockReqRes({
+        method: 'POST',
+        url: '/api/action',
+        headers: { 'x-moderator-token': 'valid-token' },
+        body: { action: 'add', operationId: 'op_reg_mod_token_succ_3' },
+      });
+      await handler(req, res);
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.success, true);
+      assert.equal(res.body.action, 'add');
+    });
+
+    // 4. Invalid moderator token is rejected
+    it('4. Invalid moderator token is rejected', async () => {
+      const { req, res } = createMockReqRes({
+        method: 'POST',
+        url: '/api/action',
+        headers: { 'x-moderator-token': 'rmt_invalid_fake_token_4' },
+        body: { action: 'add', operationId: 'op_reg_mod_token_fail_4' },
+      });
+      await handler(req, res);
+      assert.equal(res.statusCode, 401);
+      assert.equal(res.body.error.code, 'INVALID_TOKEN');
+    });
+
+    // 5. Companion token mutation succeeds using X-Companion-Token only
+    it('5. Companion token mutation succeeds using X-Companion-Token only', async () => {
+      const { req, res } = createMockReqRes({
+        method: 'POST',
+        url: '/api/action',
+        headers: { 'x-companion-token': 'scomp_valid_companion_5' },
+        body: { action: 'add', operationId: 'op_reg_companion_succ_5' },
+      });
+      await handler(req, res);
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.success, true);
+      assert.equal(res.body.action, 'add');
+    });
+
+    // 6. Companion token mistakenly supplied as Bearer JWT is not accepted as a streamer JWT
+    it('6. Companion token mistakenly supplied as Bearer JWT is not accepted as a streamer JWT', async () => {
+      const { req, res } = createMockReqRes({
+        method: 'POST',
+        url: '/api/action',
+        headers: { authorization: 'Bearer scomp_valid_companion_6' },
+        body: { action: 'add', operationId: 'op_reg_comp_as_bearer_6' },
+      });
+      await handler(req, res);
+      assert.equal(res.statusCode, 401);
+      assert.equal(res.body.error.code, 'INVALID_CREDENTIALS');
+    });
+
+    // 7. Revoked companion token is rejected
+    it('7. Revoked companion token is rejected', async () => {
+      const { req, res } = createMockReqRes({
+        method: 'POST',
+        url: '/api/action',
+        headers: { 'x-companion-token': 'revoked-companion-token' },
+        body: { action: 'add', operationId: 'op_reg_comp_revoked_7' },
+      });
+      await handler(req, res);
+      assert.equal(res.statusCode, 401);
+      assert.equal(res.body.error.code, 'INVALID_TOKEN');
+    });
+
+    // 8. Configuration RPC failure does not trigger a direct-update fallback
+    it('8. Configuration RPC failure does not trigger a direct-update fallback', async () => {
+      const origRpc = supabase.rpc;
+      const origFrom = supabase.from;
+      let directTableUpdateAttempted = false;
+
+      try {
+        supabase.rpc = async () => ({
+          data: null,
+          error: { message: 'RPC update_streamer_config execution failed', code: 'P0001' },
+        });
+
+        supabase.from = (table) => {
+          if (table === 'streamer_states') {
+            return {
+              update: () => {
+                directTableUpdateAttempted = true;
+                return {
+                  eq: () => ({
+                    select: () => ({
+                      maybeSingle: async () => ({ data: { revision: 99 }, error: null }),
+                    }),
+                  }),
+                };
+              },
+            };
+          }
+          return origFrom(table);
+        };
+
+        await assert.rejects(
+          async () => {
+            await saveCloudConfig(
+              { id: 'user-regression-test-id', email: 'streamer@test.local' },
+              { settings: { preset: 'bloodborne' } }
+            );
+          },
+          (err) => {
+            assert.equal(err.code, 'CONFIG_RPC_FAILED');
+            return true;
+          }
+        );
+
+        assert.equal(
+          directTableUpdateAttempted,
+          false,
+          'Configuration RPC failure must NEVER trigger direct-update fallback on streamer_states'
+        );
+      } finally {
+        supabase.rpc = origRpc;
+        supabase.from = origFrom;
+      }
+    });
+
+    // 9. Companion permissions returned to the client match stored permissions
+    it('9. Companion permissions returned to the client match stored permissions', async () => {
+      const testKey = 'streamer-comp-perm-key';
+      const testUserId = 'user-uuid-perm-123';
+      const companion = await createCompanionToken(testKey, testUserId);
+
+      // Verify returned permissions
+      assert.deepEqual(companion.permissions, COMPANION_PERMISSIONS);
+      assert.equal(companion.permissions.can_reset_all, false, 'can_reset_all must be false');
+      assert.equal(companion.permissions.can_increment_deaths, true);
+      assert.equal(companion.permissions.can_reset_session, true);
+
+      // Verify database-validated permissions match exactly
+      const validated = await validateModeratorToken(companion.token);
+      assert.equal(validated.valid, true);
+      assert.deepEqual(validated.permissions, companion.permissions);
+      assert.equal(validated.permissions.can_reset_all, false);
+    });
+
+    // 10. Redis rate limiting does not extend its expiry on every blocked request
+    it('10. Redis rate limiting does not extend its expiry on every blocked request', async () => {
+      const origUrl = process.env.UPSTASH_REDIS_REST_URL;
+      const origToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+      const origFetch = globalThis.fetch;
+
+      try {
+        process.env.UPSTASH_REDIS_REST_URL = 'https://fake-upstash-redis.com';
+        process.env.UPSTASH_REDIS_REST_TOKEN = 'test-token-redis-123';
+
+        let expireCallCount = 0;
+        let mockCount = 0;
+
+        globalThis.fetch = async (url, options) => {
+          const urlStr = String(url);
+          if (urlStr.includes('/pipeline')) {
+            mockCount += 1;
+            const currentTtl = mockCount === 1 ? -1 : 60 - mockCount;
+            return {
+              ok: true,
+              json: async () => [{ result: mockCount }, { result: currentTtl }],
+            };
+          }
+          if (urlStr.includes('/expire/')) {
+            expireCallCount += 1;
+            return { ok: true, json: async () => ({ result: 1 }) };
+          }
+          return origFetch(url, options);
+        };
+
+        const limit = 2;
+        const windowSec = 60;
+
+        // Request 1: initial request (allowed)
+        const req1 = await checkRateLimit('test-redis-rl-key', limit, windowSec);
+        assert.equal(req1.allowed, true);
+        assert.equal(req1.distributed, true);
+        assert.equal(expireCallCount, 1, 'EXPIRE must be called on initial request');
+
+        // Request 2: within limit (allowed)
+        const req2 = await checkRateLimit('test-redis-rl-key', limit, windowSec);
+        assert.equal(req2.allowed, true);
+        assert.equal(expireCallCount, 1, 'EXPIRE must NOT be called on request 2');
+
+        // Request 3: blocked request
+        const req3 = await checkRateLimit('test-redis-rl-key', limit, windowSec);
+        assert.equal(req3.allowed, false);
+        assert.equal(expireCallCount, 1, 'EXPIRE must NOT be called on blocked request 3');
+        assert.equal(req3.resetSeconds, 57);
+
+        // Request 4: subsequent blocked request
+        const req4 = await checkRateLimit('test-redis-rl-key', limit, windowSec);
+        assert.equal(req4.allowed, false);
+        assert.equal(expireCallCount, 1, 'EXPIRE must NOT be called on blocked request 4');
+        assert.equal(req4.resetSeconds, 56, 'Lockout TTL must count down instead of resetting to 60');
+      } finally {
+        if (origUrl) process.env.UPSTASH_REDIS_REST_URL = origUrl; else delete process.env.UPSTASH_REDIS_REST_URL;
+        if (origToken) process.env.UPSTASH_REDIS_REST_TOKEN = origToken; else delete process.env.UPSTASH_REDIS_REST_TOKEN;
+        globalThis.fetch = origFetch;
+      }
+    });
   });
 });

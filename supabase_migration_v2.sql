@@ -87,8 +87,7 @@ begin
     using (true);
 
   -- Restrict direct UPDATEs by authenticated users so counter columns cannot bypass mutate_counter
-  revoke update on public.streamer_states from public, anon;
-  revoke update (deaths, session_deaths, all_time_deaths, boss_kills) on public.streamer_states from authenticated;
+  revoke update on public.streamer_states from public, anon, authenticated;
   grant update (settings, shortcuts, bosses, current_boss, display_name, avatar_url, updated_at) on public.streamer_states to authenticated;
 
   -- 7.2 streamer_remote_tokens policies (Strict Privacy: Never readable by anonymous users)

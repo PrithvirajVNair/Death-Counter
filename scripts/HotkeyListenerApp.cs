@@ -2101,7 +2101,6 @@ namespace SoulsGameDeathCounter {
                         client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
                         client.Headers[HttpRequestHeader.ContentType] = "application/json";
                         if (!string.IsNullOrEmpty(cloudAuthToken)) {
-                            client.Headers["Authorization"] = "Bearer " + cloudAuthToken;
                             client.Headers["X-Companion-Token"] = cloudAuthToken;
                         }
 

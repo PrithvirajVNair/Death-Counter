@@ -268,13 +268,41 @@ namespace SoulsGameDeathCounter {
         private static string recordingTarget = null; // "add", "undo", "addBoss", "undoBoss"
         private static string configFilePath = "";
         private static string dataFilePath = "";
+        private static string localStateFilePath = "";
         private static IntPtr hookId = IntPtr.Zero;
         private static LowLevelKeyboardProc hookProc;
         private static long lastActionTime = 0;
         private static readonly object actionLock = new object();
 
+        // Local Persistent State (Deaths & Boss Kills saved directly on PC)
+        private static int localDeaths = 0;
+        private static int localSessionDeaths = 0;
+        private static int localAllTimeDeaths = 0;
+        private static int localBossKills = 0;
+        private static long localLastUpdated = 0;
+        private static readonly object stateLock = new object();
+
         // UI Controls
         private Button btnToggle;
+
+        // Live Scoreboard Controls (Similar to Site)
+        private Label lblDeathNumber;
+        private Label lblDeathSub;
+        private Label lblBossNumber;
+        private Label lblBossSub;
+        private Button btnManualAddDeath;
+        private Button btnManualUndoDeath;
+        private Button btnManualSetDeath;
+        private Button btnManualResetDeath;
+        private Button btnManualAddBoss;
+        private Button btnManualUndoBoss;
+        private Button btnManualSetBoss;
+        private Button btnManualResetBoss;
+        private bool confirmResetDeath = false;
+        private bool confirmResetBoss = false;
+        private System.Windows.Forms.Timer resetDeathTimer;
+        private System.Windows.Forms.Timer resetBossTimer;
+
         private ComboBox cmbAddKey;
         private ComboBox cmbUndoKey;
         private ComboBox cmbAddBossKey;
@@ -302,15 +330,22 @@ namespace SoulsGameDeathCounter {
                 instance = this;
                 InitializeComponent();
                 LoadConfig();
+                LoadLocalState();
                 isInitializing = false;
                 InstallHook();
                 StartAsyncPolling();
+                StartBackgroundStateSync();
                 UpdateUIState();
+                UpdateCountersUI();
 
                 this.Shown += delegate {
                     TestConnectionAsync();
+                    UpdateCountersUI();
                     LogActivity(string.Format("App ready. Death: [{0} / {1}] | Boss: [{2} / {3}]",
                         bindingAdd.DisplayName, bindingUndo.DisplayName, bindingAddBoss.DisplayName, bindingUndoBoss.DisplayName));
+                    if (localDeaths > 0 || localBossKills > 0) {
+                        LogActivity(string.Format("Loaded previous session from PC: {0} Deaths, {1} Boss Slain", localDeaths, localBossKills));
+                    }
                 };
             } catch (Exception ex) {
                 try {
@@ -322,7 +357,7 @@ namespace SoulsGameDeathCounter {
 
         private void InitializeComponent() {
             this.Text = "Souls Game Death & Boss Counter — Hotkeys";
-            this.Size = new Size(530, 715);
+            this.Size = new Size(530, 830);
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
             this.StartPosition = FormStartPosition.CenterScreen;
@@ -365,19 +400,211 @@ namespace SoulsGameDeathCounter {
 
             // ─── Big Toggle Activation Button ───
             btnToggle = new Button();
-            btnToggle.Location = new Point(20, 76);
-            btnToggle.Size = new Size(475, 46);
+            btnToggle.Location = new Point(20, 74);
+            btnToggle.Size = new Size(475, 42);
             btnToggle.FlatStyle = FlatStyle.Flat;
             btnToggle.FlatAppearance.BorderSize = 1;
-            btnToggle.Font = new Font("Segoe UI", 10.5F, FontStyle.Bold);
+            btnToggle.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
             btnToggle.Cursor = Cursors.Hand;
             btnToggle.Click += BtnToggle_Click;
             this.Controls.Add(btnToggle);
 
+            // ─── Live Scoreboard Card (Death & Boss Counts Similar to Site) ───
+            GroupBox grpScoreboard = new GroupBox();
+            grpScoreboard.Text = " Live Counts (Real-Time • Synced with OBS & Cloud) ";
+            grpScoreboard.Location = new Point(20, 124);
+            grpScoreboard.Size = new Size(475, 142);
+            grpScoreboard.ForeColor = Color.FromArgb(200, 166, 93);
+            grpScoreboard.BackColor = Color.FromArgb(24, 25, 20);
+
+            // Left Box: Deaths
+            Panel pnlDeath = new Panel();
+            pnlDeath.Location = new Point(12, 20);
+            pnlDeath.Size = new Size(220, 112);
+            pnlDeath.BackColor = Color.FromArgb(16, 17, 14);
+            pnlDeath.BorderStyle = BorderStyle.FixedSingle;
+
+            Label lblDeathTag = new Label();
+            lblDeathTag.Text = "DEATHS";
+            lblDeathTag.Font = new Font("Georgia", 8.5F, FontStyle.Bold);
+            lblDeathTag.ForeColor = Color.FromArgb(200, 166, 93);
+            lblDeathTag.Location = new Point(8, 6);
+            lblDeathTag.AutoSize = true;
+            pnlDeath.Controls.Add(lblDeathTag);
+
+            lblDeathNumber = new Label();
+            lblDeathNumber.Text = localDeaths.ToString();
+            lblDeathNumber.Font = new Font("Georgia", 22F, FontStyle.Bold);
+            lblDeathNumber.ForeColor = Color.FromArgb(248, 113, 113);
+            lblDeathNumber.Location = new Point(6, 22);
+            lblDeathNumber.Size = new Size(204, 34);
+            lblDeathNumber.Cursor = Cursors.Hand;
+            lblDeathNumber.Click += delegate { PromptSetCount("death"); };
+            pnlDeath.Controls.Add(lblDeathNumber);
+
+            lblDeathSub = new Label();
+            lblDeathSub.Text = string.Format("Session: {0} • Total: {1}", localSessionDeaths, localAllTimeDeaths);
+            lblDeathSub.Font = new Font("Segoe UI", 7.5F);
+            lblDeathSub.ForeColor = Color.FromArgb(145, 140, 125);
+            lblDeathSub.Location = new Point(8, 56);
+            lblDeathSub.Size = new Size(204, 16);
+            pnlDeath.Controls.Add(lblDeathSub);
+
+            btnManualAddDeath = new Button();
+            btnManualAddDeath.Text = "+1 Death";
+            btnManualAddDeath.Location = new Point(6, 76);
+            btnManualAddDeath.Size = new Size(60, 26);
+            btnManualAddDeath.FlatStyle = FlatStyle.Flat;
+            btnManualAddDeath.FlatAppearance.BorderSize = 1;
+            btnManualAddDeath.FlatAppearance.BorderColor = Color.FromArgb(80, 35, 35);
+            btnManualAddDeath.BackColor = Color.FromArgb(42, 18, 18);
+            btnManualAddDeath.ForeColor = Color.FromArgb(248, 113, 113);
+            btnManualAddDeath.Font = new Font("Segoe UI", 7.5F, FontStyle.Bold);
+            btnManualAddDeath.Cursor = Cursors.Hand;
+            btnManualAddDeath.Click += delegate { TriggerAction("add"); };
+            pnlDeath.Controls.Add(btnManualAddDeath);
+
+            btnManualUndoDeath = new Button();
+            btnManualUndoDeath.Text = "Undo";
+            btnManualUndoDeath.Location = new Point(70, 76);
+            btnManualUndoDeath.Size = new Size(44, 26);
+            btnManualUndoDeath.FlatStyle = FlatStyle.Flat;
+            btnManualUndoDeath.FlatAppearance.BorderSize = 1;
+            btnManualUndoDeath.FlatAppearance.BorderColor = Color.FromArgb(60, 55, 45);
+            btnManualUndoDeath.BackColor = Color.FromArgb(28, 29, 23);
+            btnManualUndoDeath.ForeColor = Color.FromArgb(200, 195, 180);
+            btnManualUndoDeath.Font = new Font("Segoe UI", 7.5F);
+            btnManualUndoDeath.Cursor = Cursors.Hand;
+            btnManualUndoDeath.Click += delegate { TriggerAction("undo"); };
+            pnlDeath.Controls.Add(btnManualUndoDeath);
+
+            btnManualSetDeath = new Button();
+            btnManualSetDeath.Text = "Set...";
+            btnManualSetDeath.Location = new Point(118, 76);
+            btnManualSetDeath.Size = new Size(44, 26);
+            btnManualSetDeath.FlatStyle = FlatStyle.Flat;
+            btnManualSetDeath.FlatAppearance.BorderSize = 1;
+            btnManualSetDeath.FlatAppearance.BorderColor = Color.FromArgb(74, 63, 38);
+            btnManualSetDeath.BackColor = Color.FromArgb(32, 33, 26);
+            btnManualSetDeath.ForeColor = Color.FromArgb(200, 166, 93);
+            btnManualSetDeath.Font = new Font("Segoe UI", 7.5F);
+            btnManualSetDeath.Cursor = Cursors.Hand;
+            btnManualSetDeath.Click += delegate { PromptSetCount("death"); };
+            pnlDeath.Controls.Add(btnManualSetDeath);
+
+            btnManualResetDeath = new Button();
+            btnManualResetDeath.Text = "Reset";
+            btnManualResetDeath.Location = new Point(166, 76);
+            btnManualResetDeath.Size = new Size(46, 26);
+            btnManualResetDeath.FlatStyle = FlatStyle.Flat;
+            btnManualResetDeath.FlatAppearance.BorderSize = 1;
+            btnManualResetDeath.FlatAppearance.BorderColor = Color.FromArgb(70, 30, 30);
+            btnManualResetDeath.BackColor = Color.FromArgb(26, 16, 16);
+            btnManualResetDeath.ForeColor = Color.FromArgb(220, 100, 100);
+            btnManualResetDeath.Font = new Font("Segoe UI", 7F);
+            btnManualResetDeath.Cursor = Cursors.Hand;
+            btnManualResetDeath.Click += BtnManualResetDeath_Click;
+            pnlDeath.Controls.Add(btnManualResetDeath);
+
+            grpScoreboard.Controls.Add(pnlDeath);
+
+            // Right Box: Boss Slain
+            Panel pnlBoss = new Panel();
+            pnlBoss.Location = new Point(242, 20);
+            pnlBoss.Size = new Size(220, 112);
+            pnlBoss.BackColor = Color.FromArgb(16, 17, 14);
+            pnlBoss.BorderStyle = BorderStyle.FixedSingle;
+
+            Label lblBossTag = new Label();
+            lblBossTag.Text = "BOSS SLAIN";
+            lblBossTag.Font = new Font("Georgia", 8.5F, FontStyle.Bold);
+            lblBossTag.ForeColor = Color.FromArgb(200, 166, 93);
+            lblBossTag.Location = new Point(8, 6);
+            lblBossTag.AutoSize = true;
+            pnlBoss.Controls.Add(lblBossTag);
+
+            lblBossNumber = new Label();
+            lblBossNumber.Text = localBossKills.ToString();
+            lblBossNumber.Font = new Font("Georgia", 22F, FontStyle.Bold);
+            lblBossNumber.ForeColor = Color.FromArgb(250, 204, 21);
+            lblBossNumber.Location = new Point(6, 22);
+            lblBossNumber.Size = new Size(204, 34);
+            lblBossNumber.Cursor = Cursors.Hand;
+            lblBossNumber.Click += delegate { PromptSetCount("boss"); };
+            pnlBoss.Controls.Add(lblBossNumber);
+
+            lblBossSub = new Label();
+            lblBossSub.Text = localBossKills == 1 ? "1 Boss Defeated" : string.Format("{0} Bosses Defeated", localBossKills);
+            lblBossSub.Font = new Font("Segoe UI", 7.5F);
+            lblBossSub.ForeColor = Color.FromArgb(145, 140, 125);
+            lblBossSub.Location = new Point(8, 56);
+            lblBossSub.Size = new Size(204, 16);
+            pnlBoss.Controls.Add(lblBossSub);
+
+            btnManualAddBoss = new Button();
+            btnManualAddBoss.Text = "+1 Boss";
+            btnManualAddBoss.Location = new Point(6, 76);
+            btnManualAddBoss.Size = new Size(60, 26);
+            btnManualAddBoss.FlatStyle = FlatStyle.Flat;
+            btnManualAddBoss.FlatAppearance.BorderSize = 1;
+            btnManualAddBoss.FlatAppearance.BorderColor = Color.FromArgb(80, 60, 20);
+            btnManualAddBoss.BackColor = Color.FromArgb(42, 34, 16);
+            btnManualAddBoss.ForeColor = Color.FromArgb(250, 204, 21);
+            btnManualAddBoss.Font = new Font("Segoe UI", 7.5F, FontStyle.Bold);
+            btnManualAddBoss.Cursor = Cursors.Hand;
+            btnManualAddBoss.Click += delegate { TriggerAction("addBossKill"); };
+            pnlBoss.Controls.Add(btnManualAddBoss);
+
+            btnManualUndoBoss = new Button();
+            btnManualUndoBoss.Text = "Undo";
+            btnManualUndoBoss.Location = new Point(70, 76);
+            btnManualUndoBoss.Size = new Size(44, 26);
+            btnManualUndoBoss.FlatStyle = FlatStyle.Flat;
+            btnManualUndoBoss.FlatAppearance.BorderSize = 1;
+            btnManualUndoBoss.FlatAppearance.BorderColor = Color.FromArgb(60, 55, 45);
+            btnManualUndoBoss.BackColor = Color.FromArgb(28, 29, 23);
+            btnManualUndoBoss.ForeColor = Color.FromArgb(200, 195, 180);
+            btnManualUndoBoss.Font = new Font("Segoe UI", 7.5F);
+            btnManualUndoBoss.Cursor = Cursors.Hand;
+            btnManualUndoBoss.Click += delegate { TriggerAction("undoBossKill"); };
+            pnlBoss.Controls.Add(btnManualUndoBoss);
+
+            btnManualSetBoss = new Button();
+            btnManualSetBoss.Text = "Set...";
+            btnManualSetBoss.Location = new Point(118, 76);
+            btnManualSetBoss.Size = new Size(44, 26);
+            btnManualSetBoss.FlatStyle = FlatStyle.Flat;
+            btnManualSetBoss.FlatAppearance.BorderSize = 1;
+            btnManualSetBoss.FlatAppearance.BorderColor = Color.FromArgb(74, 63, 38);
+            btnManualSetBoss.BackColor = Color.FromArgb(32, 33, 26);
+            btnManualSetBoss.ForeColor = Color.FromArgb(200, 166, 93);
+            btnManualSetBoss.Font = new Font("Segoe UI", 7.5F);
+            btnManualSetBoss.Cursor = Cursors.Hand;
+            btnManualSetBoss.Click += delegate { PromptSetCount("boss"); };
+            pnlBoss.Controls.Add(btnManualSetBoss);
+
+            btnManualResetBoss = new Button();
+            btnManualResetBoss.Text = "Reset";
+            btnManualResetBoss.Location = new Point(166, 76);
+            btnManualResetBoss.Size = new Size(46, 26);
+            btnManualResetBoss.FlatStyle = FlatStyle.Flat;
+            btnManualResetBoss.FlatAppearance.BorderSize = 1;
+            btnManualResetBoss.FlatAppearance.BorderColor = Color.FromArgb(70, 30, 30);
+            btnManualResetBoss.BackColor = Color.FromArgb(26, 16, 16);
+            btnManualResetBoss.ForeColor = Color.FromArgb(220, 100, 100);
+            btnManualResetBoss.Font = new Font("Segoe UI", 7F);
+            btnManualResetBoss.Cursor = Cursors.Hand;
+            btnManualResetBoss.Click += BtnManualResetBoss_Click;
+            pnlBoss.Controls.Add(btnManualResetBoss);
+
+            grpScoreboard.Controls.Add(pnlBoss);
+
+            this.Controls.Add(grpScoreboard);
+
             // ─── Hotkeys Configuration Card ───
             GroupBox grpHotkeys = new GroupBox();
             grpHotkeys.Text = " Configured Hotkeys (Customizable • Works In-Game) ";
-            grpHotkeys.Location = new Point(20, 132);
+            grpHotkeys.Location = new Point(20, 276);
             grpHotkeys.Size = new Size(475, 192);
             grpHotkeys.ForeColor = Color.FromArgb(200, 166, 93);
             grpHotkeys.BackColor = Color.FromArgb(24, 25, 20);
@@ -559,8 +786,8 @@ namespace SoulsGameDeathCounter {
             // ─── Server URL Connection Card ───
             GroupBox grpServer = new GroupBox();
             grpServer.Text = " Overlay Server Connection ";
-            grpServer.Location = new Point(20, 334);
-            grpServer.Size = new Size(475, 88);
+            grpServer.Location = new Point(20, 476);
+            grpServer.Size = new Size(475, 84);
             grpServer.ForeColor = Color.FromArgb(200, 166, 93);
             grpServer.BackColor = Color.FromArgb(24, 25, 20);
 
@@ -613,14 +840,14 @@ namespace SoulsGameDeathCounter {
             // ─── Live Activity Log ───
             Label lblLog = new Label();
             lblLog.Text = "Live Activity & Keystroke Monitor:";
-            lblLog.Location = new Point(20, 430);
+            lblLog.Location = new Point(20, 568);
             lblLog.AutoSize = true;
             lblLog.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
             lblLog.ForeColor = Color.FromArgb(160, 155, 140);
             this.Controls.Add(lblLog);
 
             txtActivityLog = new TextBox();
-            txtActivityLog.Location = new Point(20, 452);
+            txtActivityLog.Location = new Point(20, 590);
             txtActivityLog.Size = new Size(475, 155);
             txtActivityLog.Multiline = true;
             txtActivityLog.ReadOnly = true;
@@ -633,8 +860,8 @@ namespace SoulsGameDeathCounter {
 
             // ─── Footer / Minimize Checkbox ───
             chkMinimizeToTray = new CheckBox();
-            chkMinimizeToTray.Text = "Minimize to System Tray when closed (keeps running)";
-            chkMinimizeToTray.Location = new Point(22, 618);
+            chkMinimizeToTray.Text = "Minimize to System Tray when closed (keeps running in background)";
+            chkMinimizeToTray.Location = new Point(22, 754);
             chkMinimizeToTray.AutoSize = true;
             chkMinimizeToTray.ForeColor = Color.FromArgb(145, 140, 125);
             chkMinimizeToTray.Checked = true;
@@ -967,20 +1194,39 @@ namespace SoulsGameDeathCounter {
                         string json = client.DownloadString(endpoint);
                         Match mDeaths = Regex.Match(json, @"""deaths""\s*:\s*(\d+)");
                         Match mBoss = Regex.Match(json, @"""bossKills""\s*:\s*(\d+)");
-                        string deathCount = mDeaths.Success ? mDeaths.Groups[1].Value : "0";
-                        string bossCount = mBoss.Success ? mBoss.Groups[1].Value : "0";
+                        Match mTime = Regex.Match(json, @"""lastUpdated""\s*:\s*(\d+)");
+
+                        int srvDeaths = mDeaths.Success ? int.Parse(mDeaths.Groups[1].Value) : 0;
+                        int srvBoss = mBoss.Success ? int.Parse(mBoss.Groups[1].Value) : 0;
+                        long srvTime = mTime.Success ? long.Parse(mTime.Groups[1].Value) : 0;
+
+                        lock (stateLock) {
+                            // If server is cold at 0 or local is newer, reseed server immediately!
+                            if ((localLastUpdated > srvTime) || (srvDeaths == 0 && srvBoss == 0 && (localDeaths > 0 || localBossKills > 0))) {
+                                string syncEndpoint = serverUrl.TrimEnd('/') + "/api/state";
+                                string payload = string.Format(
+                                    "{{\"type\":\"stateUpdate\",\"deaths\":{0},\"sessionDeaths\":{1},\"allTimeDeaths\":{2},\"bossKills\":{3},\"lastUpdated\":{4}}}",
+                                    localDeaths, localSessionDeaths, localAllTimeDeaths, localBossKills, localLastUpdated > 0 ? localLastUpdated : GetCurrentTimestampMs()
+                                );
+                                client.UploadString(syncEndpoint, "POST", payload);
+                                srvDeaths = localDeaths;
+                                srvBoss = localBossKills;
+                            } else if (srvTime > localLastUpdated) {
+                                localDeaths = srvDeaths;
+                                localBossKills = srvBoss;
+                                localLastUpdated = srvTime;
+                                SaveLocalState();
+                            }
+                        }
 
                         SafeInvoke(delegate {
-                            if (lblServerPing != null && !lblServerPing.IsDisposed) {
-                                lblServerPing.Text = "Connected! Death: " + deathCount + " | Boss Slain: " + bossCount;
-                                lblServerPing.ForeColor = Color.FromArgb(74, 222, 128);
-                            }
+                            UpdateStatusDisplay(srvDeaths, srvBoss);
                         });
                     }
                 } catch (Exception ex) {
                     SafeInvoke(delegate {
                         if (lblServerPing != null && !lblServerPing.IsDisposed) {
-                            lblServerPing.Text = "Cannot reach server (" + ex.Message + ")";
+                            lblServerPing.Text = "Local active (Death: " + localDeaths + "). Server notice: " + ex.Message;
                             lblServerPing.ForeColor = Color.FromArgb(248, 113, 113);
                         }
                     });
@@ -1170,11 +1416,398 @@ namespace SoulsGameDeathCounter {
             }
         }
 
+        private static long GetCurrentTimestampMs() {
+            return (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+        }
+
+        private static string GetLocalStateFilePath() {
+            if (!string.IsNullOrEmpty(localStateFilePath)) return localStateFilePath;
+            try {
+                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string dir = Path.Combine(localAppData, "SoulsDeathCounter");
+                if (!Directory.Exists(dir)) {
+                    Directory.CreateDirectory(dir);
+                }
+                localStateFilePath = Path.Combine(dir, "death-state.json");
+            } catch {
+                localStateFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "death-state.json");
+            }
+            return localStateFilePath;
+        }
+
+        private static void LoadLocalState() {
+            try {
+                string path = GetLocalStateFilePath();
+                string fallbackPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "death-state.json");
+                string usePath = File.Exists(path) ? path : (File.Exists(fallbackPath) ? fallbackPath : null);
+
+                if (usePath != null) {
+                    string json = File.ReadAllText(usePath);
+                    Match mDeaths = Regex.Match(json, @"""deaths""\s*:\s*(\d+)");
+                    Match mSession = Regex.Match(json, @"""sessionDeaths""\s*:\s*(\d+)");
+                    Match mAllTime = Regex.Match(json, @"""allTimeDeaths""\s*:\s*(\d+)");
+                    Match mBoss = Regex.Match(json, @"""bossKills""\s*:\s*(\d+)");
+                    Match mTime = Regex.Match(json, @"""lastUpdated""\s*:\s*(\d+)");
+
+                    if (mDeaths.Success) int.TryParse(mDeaths.Groups[1].Value, out localDeaths);
+                    if (mSession.Success) int.TryParse(mSession.Groups[1].Value, out localSessionDeaths);
+                    if (mAllTime.Success) int.TryParse(mAllTime.Groups[1].Value, out localAllTimeDeaths);
+                    if (mBoss.Success) int.TryParse(mBoss.Groups[1].Value, out localBossKills);
+                    if (mTime.Success) long.TryParse(mTime.Groups[1].Value, out localLastUpdated);
+                }
+            } catch {}
+        }
+
+        private static void SaveLocalState() {
+            try {
+                string path = GetLocalStateFilePath();
+                string json = string.Format(
+                    "{{\n  \"deaths\": {0},\n  \"sessionDeaths\": {1},\n  \"allTimeDeaths\": {2},\n  \"bossKills\": {3},\n  \"lastUpdated\": {4}\n}}",
+                    localDeaths, localSessionDeaths, localAllTimeDeaths, localBossKills, localLastUpdated
+                );
+                File.WriteAllText(path, json);
+            } catch {}
+        }
+
+        private void UpdateStatusDisplay(int deaths, int bossKills) {
+            if (lblServerPing != null && !lblServerPing.IsDisposed) {
+                lblServerPing.Text = string.Format("Live OBS & Saved on PC! Death: {0} | Boss: {1}", deaths, bossKills);
+                lblServerPing.ForeColor = Color.FromArgb(74, 222, 128);
+            }
+            UpdateCountersUI();
+        }
+
+        private void UpdateCountersUI() {
+            SafeInvoke(delegate {
+                if (lblDeathNumber != null && !lblDeathNumber.IsDisposed) {
+                    lblDeathNumber.Text = localDeaths.ToString();
+                }
+                if (lblDeathSub != null && !lblDeathSub.IsDisposed) {
+                    lblDeathSub.Text = string.Format("Session: {0} • Total: {1}", localSessionDeaths, localAllTimeDeaths);
+                }
+                if (lblBossNumber != null && !lblBossNumber.IsDisposed) {
+                    lblBossNumber.Text = localBossKills.ToString();
+                }
+                if (lblBossSub != null && !lblBossSub.IsDisposed) {
+                    lblBossSub.Text = localBossKills == 1 ? "1 Boss Defeated" : string.Format("{0} Bosses Defeated", localBossKills);
+                }
+            });
+        }
+
+        private void PromptSetCount(string target) {
+            bool isDeath = target == "death";
+            string title = isDeath ? "Set Death Count" : "Set Boss Slain Count";
+            int currentVal = isDeath ? localDeaths : localBossKills;
+
+            using (Form prompt = new Form()) {
+                prompt.Text = title;
+                prompt.Size = new Size(320, 180);
+                prompt.FormBorderStyle = FormBorderStyle.FixedDialog;
+                prompt.StartPosition = FormStartPosition.CenterParent;
+                prompt.MaximizeBox = false;
+                prompt.MinimizeBox = false;
+                prompt.BackColor = Color.FromArgb(20, 21, 17);
+                prompt.ForeColor = Color.FromArgb(226, 217, 197);
+                prompt.Font = new Font("Segoe UI", 9F);
+
+                Label lblPrompt = new Label();
+                lblPrompt.Text = string.Format("Enter new {0} count:", isDeath ? "death" : "boss slain");
+                lblPrompt.Location = new Point(20, 20);
+                lblPrompt.AutoSize = true;
+                prompt.Controls.Add(lblPrompt);
+
+                TextBox txtVal = new TextBox();
+                txtVal.Text = currentVal.ToString();
+                txtVal.Location = new Point(22, 48);
+                txtVal.Size = new Size(260, 24);
+                txtVal.BackColor = Color.FromArgb(12, 13, 10);
+                txtVal.ForeColor = Color.FromArgb(200, 166, 93);
+                txtVal.BorderStyle = BorderStyle.FixedSingle;
+                txtVal.SelectAll();
+                prompt.Controls.Add(txtVal);
+
+                Button btnOk = new Button();
+                btnOk.Text = "Set Count";
+                btnOk.Location = new Point(116, 90);
+                btnOk.Size = new Size(86, 28);
+                btnOk.FlatStyle = FlatStyle.Flat;
+                btnOk.FlatAppearance.BorderSize = 1;
+                btnOk.FlatAppearance.BorderColor = Color.FromArgb(74, 63, 38);
+                btnOk.BackColor = Color.FromArgb(42, 34, 16);
+                btnOk.ForeColor = Color.FromArgb(250, 204, 21);
+                btnOk.DialogResult = DialogResult.OK;
+                prompt.AcceptButton = btnOk;
+                prompt.Controls.Add(btnOk);
+
+                Button btnCancel = new Button();
+                btnCancel.Text = "Cancel";
+                btnCancel.Location = new Point(210, 90);
+                btnCancel.Size = new Size(72, 28);
+                btnCancel.FlatStyle = FlatStyle.Flat;
+                btnCancel.FlatAppearance.BorderSize = 1;
+                btnCancel.FlatAppearance.BorderColor = Color.FromArgb(60, 55, 45);
+                btnCancel.BackColor = Color.FromArgb(28, 29, 23);
+                btnCancel.ForeColor = Color.FromArgb(160, 155, 140);
+                btnCancel.DialogResult = DialogResult.Cancel;
+                prompt.CancelButton = btnCancel;
+                prompt.Controls.Add(btnCancel);
+
+                if (prompt.ShowDialog(this) == DialogResult.OK) {
+                    int val;
+                    if (int.TryParse(txtVal.Text.Trim(), out val) && val >= 0) {
+                        lock (stateLock) {
+                            if (isDeath) {
+                                int diff = val - localDeaths;
+                                localDeaths = val;
+                                localSessionDeaths = Math.Max(0, localSessionDeaths + diff);
+                                localAllTimeDeaths = Math.Max(0, localAllTimeDeaths + Math.Max(0, diff));
+                            } else {
+                                localBossKills = val;
+                            }
+                            localLastUpdated = GetCurrentTimestampMs();
+                            SaveLocalState();
+                        }
+                        UpdateStatusDisplay(localDeaths, localBossKills);
+                        UpdateCountersUI();
+
+                        // Sync to cloud server
+                        ThreadPool.QueueUserWorkItem(delegate {
+                            try {
+                                using (WebClient client = new WebClient()) {
+                                    client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
+                                    client.Headers[HttpRequestHeader.ContentType] = "application/json";
+                                    string endpoint = serverUrl.TrimEnd('/') + "/api/state";
+                                    string payload = string.Format(
+                                        "{{\"type\":\"stateUpdate\",\"deaths\":{0},\"sessionDeaths\":{1},\"allTimeDeaths\":{2},\"bossKills\":{3},\"lastUpdated\":{4}}}",
+                                        localDeaths, localSessionDeaths, localAllTimeDeaths, localBossKills, localLastUpdated
+                                    );
+                                    client.UploadString(endpoint, "POST", payload);
+                                }
+                            } catch {}
+                        });
+
+                        LogActivity(string.Format("Manually set {0} to {1} (Saved on PC & live OBS)", isDeath ? "Deaths" : "Boss Slain", val));
+                    }
+                }
+            }
+        }
+
+        private void BtnManualResetDeath_Click(object sender, EventArgs e) {
+            if (confirmResetDeath) {
+                confirmResetDeath = false;
+                btnManualResetDeath.Text = "Reset";
+                btnManualResetDeath.BackColor = Color.FromArgb(26, 16, 16);
+                btnManualResetDeath.ForeColor = Color.FromArgb(220, 100, 100);
+
+                lock (stateLock) {
+                    localDeaths = 0;
+                    localSessionDeaths = 0;
+                    localLastUpdated = GetCurrentTimestampMs();
+                    SaveLocalState();
+                }
+                UpdateStatusDisplay(localDeaths, localBossKills);
+                UpdateCountersUI();
+
+                ThreadPool.QueueUserWorkItem(delegate {
+                    try {
+                        using (WebClient client = new WebClient()) {
+                            client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
+                            client.Headers[HttpRequestHeader.ContentType] = "application/json";
+                            string endpoint = serverUrl.TrimEnd('/') + "/api/state";
+                            string payload = string.Format(
+                                "{{\"type\":\"stateUpdate\",\"deaths\":0,\"sessionDeaths\":0,\"allTimeDeaths\":{0},\"bossKills\":{1},\"lastUpdated\":{2}}}",
+                                localAllTimeDeaths, localBossKills, localLastUpdated
+                            );
+                            client.UploadString(endpoint, "POST", payload);
+                        }
+                    } catch {}
+                });
+
+                LogActivity("Deaths reset to 0 (Saved on PC & live OBS)");
+            } else {
+                confirmResetDeath = true;
+                btnManualResetDeath.Text = "Sure?";
+                btnManualResetDeath.BackColor = Color.FromArgb(70, 20, 20);
+                btnManualResetDeath.ForeColor = Color.FromArgb(255, 200, 200);
+
+                if (resetDeathTimer == null) {
+                    resetDeathTimer = new System.Windows.Forms.Timer();
+                    resetDeathTimer.Interval = 3000;
+                    resetDeathTimer.Tick += delegate {
+                        confirmResetDeath = false;
+                        resetDeathTimer.Stop();
+                        if (btnManualResetDeath != null && !btnManualResetDeath.IsDisposed) {
+                            btnManualResetDeath.Text = "Reset";
+                            btnManualResetDeath.BackColor = Color.FromArgb(26, 16, 16);
+                            btnManualResetDeath.ForeColor = Color.FromArgb(220, 100, 100);
+                        }
+                    };
+                }
+                resetDeathTimer.Stop();
+                resetDeathTimer.Start();
+            }
+        }
+
+        private void BtnManualResetBoss_Click(object sender, EventArgs e) {
+            if (confirmResetBoss) {
+                confirmResetBoss = false;
+                btnManualResetBoss.Text = "Reset";
+                btnManualResetBoss.BackColor = Color.FromArgb(26, 16, 16);
+                btnManualResetBoss.ForeColor = Color.FromArgb(220, 100, 100);
+
+                lock (stateLock) {
+                    localBossKills = 0;
+                    localLastUpdated = GetCurrentTimestampMs();
+                    SaveLocalState();
+                }
+                UpdateStatusDisplay(localDeaths, localBossKills);
+                UpdateCountersUI();
+
+                ThreadPool.QueueUserWorkItem(delegate {
+                    try {
+                        using (WebClient client = new WebClient()) {
+                            client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
+                            client.Headers[HttpRequestHeader.ContentType] = "application/json";
+                            string endpoint = serverUrl.TrimEnd('/') + "/api/state";
+                            string payload = string.Format(
+                                "{{\"type\":\"stateUpdate\",\"deaths\":{0},\"sessionDeaths\":{1},\"allTimeDeaths\":{2},\"bossKills\":0,\"lastUpdated\":{3}}}",
+                                localDeaths, localSessionDeaths, localAllTimeDeaths, localLastUpdated
+                            );
+                            client.UploadString(endpoint, "POST", payload);
+                        }
+                    } catch {}
+                });
+
+                LogActivity("Boss Slain count reset to 0 (Saved on PC & live OBS)");
+            } else {
+                confirmResetBoss = true;
+                btnManualResetBoss.Text = "Sure?";
+                btnManualResetBoss.BackColor = Color.FromArgb(70, 20, 20);
+                btnManualResetBoss.ForeColor = Color.FromArgb(255, 200, 200);
+
+                if (resetBossTimer == null) {
+                    resetBossTimer = new System.Windows.Forms.Timer();
+                    resetBossTimer.Interval = 3000;
+                    resetBossTimer.Tick += delegate {
+                        confirmResetBoss = false;
+                        resetBossTimer.Stop();
+                        if (btnManualResetBoss != null && !btnManualResetBoss.IsDisposed) {
+                            btnManualResetBoss.Text = "Reset";
+                            btnManualResetBoss.BackColor = Color.FromArgb(26, 16, 16);
+                            btnManualResetBoss.ForeColor = Color.FromArgb(220, 100, 100);
+                        }
+                    };
+                }
+                resetBossTimer.Stop();
+                resetBossTimer.Start();
+            }
+        }
+
+        private static void StartBackgroundStateSync() {
+            Thread syncThread = new Thread(new ThreadStart(BackgroundStateSyncLoop));
+            syncThread.IsBackground = true;
+            syncThread.Start();
+        }
+
+        private static void BackgroundStateSyncLoop() {
+            Thread.Sleep(2000);
+            while (true) {
+                try {
+                    SyncWithServerOnce();
+                } catch {}
+                Thread.Sleep(3500);
+            }
+        }
+
+        private static void SyncWithServerOnce() {
+            try {
+                using (WebClient client = new WebClient()) {
+                    client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
+                    client.Headers[HttpRequestHeader.ContentType] = "application/json";
+                    string endpoint = serverUrl.TrimEnd('/') + "/api/state?_t=" + DateTime.UtcNow.Ticks;
+                    string json = client.DownloadString(endpoint);
+
+                    Match mDeaths = Regex.Match(json, @"""deaths""\s*:\s*(\d+)");
+                    Match mSession = Regex.Match(json, @"""sessionDeaths""\s*:\s*(\d+)");
+                    Match mAllTime = Regex.Match(json, @"""allTimeDeaths""\s*:\s*(\d+)");
+                    Match mBoss = Regex.Match(json, @"""bossKills""\s*:\s*(\d+)");
+                    Match mTime = Regex.Match(json, @"""lastUpdated""\s*:\s*(\d+)");
+
+                    int srvDeaths = mDeaths.Success ? int.Parse(mDeaths.Groups[1].Value) : 0;
+                    int srvSession = mSession.Success ? int.Parse(mSession.Groups[1].Value) : 0;
+                    int srvAllTime = mAllTime.Success ? int.Parse(mAllTime.Groups[1].Value) : 0;
+                    int srvBoss = mBoss.Success ? int.Parse(mBoss.Groups[1].Value) : 0;
+                    long srvTime = mTime.Success ? long.Parse(mTime.Groups[1].Value) : 0;
+
+                    lock (stateLock) {
+                        // If server is cold at 0 while we have progress, OR local is newer: reseed server!
+                        if ((localLastUpdated > srvTime) || (srvDeaths == 0 && srvBoss == 0 && (localDeaths > 0 || localBossKills > 0))) {
+                            string syncEndpoint = serverUrl.TrimEnd('/') + "/api/state";
+                            string payload = string.Format(
+                                "{{\"type\":\"stateUpdate\",\"deaths\":{0},\"sessionDeaths\":{1},\"allTimeDeaths\":{2},\"bossKills\":{3},\"lastUpdated\":{4}}}",
+                                localDeaths, localSessionDeaths, localAllTimeDeaths, localBossKills, localLastUpdated > 0 ? localLastUpdated : GetCurrentTimestampMs()
+                            );
+                            client.UploadString(syncEndpoint, "POST", payload);
+                            return;
+                        }
+
+                        // If server has newer timestamp (e.g. user clicked Reset or updated via web browser):
+                        if (srvTime > localLastUpdated) {
+                            localDeaths = srvDeaths;
+                            localSessionDeaths = srvSession;
+                            localAllTimeDeaths = srvAllTime;
+                            localBossKills = srvBoss;
+                            localLastUpdated = srvTime;
+                            SaveLocalState();
+
+                            if (instance != null) {
+                                instance.SafeInvoke(delegate {
+                                    instance.UpdateStatusDisplay(localDeaths, localBossKills);
+                                });
+                            }
+                        }
+                    }
+                }
+            } catch {}
+        }
+
         private static void TriggerAction(string action) {
             long now = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
             lock (actionLock) {
                 if (now - lastActionTime < 350) return;
                 lastActionTime = now;
+            }
+
+            int curD, curS, curA, curB;
+            long curT;
+
+            lock (stateLock) {
+                if (action == "add") {
+                    localDeaths++;
+                    localSessionDeaths++;
+                    localAllTimeDeaths++;
+                } else if (action == "undo") {
+                    if (localDeaths > 0) localDeaths--;
+                    if (localSessionDeaths > 0) localSessionDeaths--;
+                } else if (action == "addBossKill") {
+                    localBossKills++;
+                } else if (action == "undoBossKill") {
+                    if (localBossKills > 0) localBossKills--;
+                }
+                localLastUpdated = GetCurrentTimestampMs();
+                SaveLocalState();
+
+                curD = localDeaths;
+                curS = localSessionDeaths;
+                curA = localAllTimeDeaths;
+                curB = localBossKills;
+                curT = localLastUpdated;
+            }
+
+            if (instance != null) {
+                instance.SafeInvoke(delegate {
+                    instance.UpdateStatusDisplay(curD, curB);
+                });
             }
 
             ThreadPool.QueueUserWorkItem(delegate {
@@ -1183,36 +1816,26 @@ namespace SoulsGameDeathCounter {
                         client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
                         client.Headers[HttpRequestHeader.ContentType] = "application/json";
                         string endpoint = serverUrl.TrimEnd('/') + "/api/action";
-                        string res = client.UploadString(endpoint, "POST", "{\"action\":\"" + action + "\"}");
-
-                        Match mDeaths = Regex.Match(res, @"""deaths""\s*:\s*(\d+)");
-                        Match mBoss = Regex.Match(res, @"""bossKills""\s*:\s*(\d+)");
-                        string deathCount = mDeaths.Success ? mDeaths.Groups[1].Value : "?";
-                        string bossCount = mBoss.Success ? mBoss.Groups[1].Value : "0";
+                        string payload = string.Format(
+                            "{{\"action\":\"{0}\",\"deaths\":{1},\"sessionDeaths\":{2},\"allTimeDeaths\":{3},\"bossKills\":{4},\"lastUpdated\":{5}}}",
+                            action, curD, curS, curA, curB, curT
+                        );
+                        string res = client.UploadString(endpoint, "POST", payload);
 
                         if (instance != null) {
                             string keyDesc = "";
                             string actionDesc = "";
-                            if (action == "add") {
-                                keyDesc = bindingAdd.DisplayName;
-                                actionDesc = "+1 Death";
-                            } else if (action == "undo") {
-                                keyDesc = bindingUndo.DisplayName;
-                                actionDesc = "Undo Death";
-                            } else if (action == "addBossKill") {
-                                keyDesc = bindingAddBoss.DisplayName;
-                                actionDesc = "+1 Boss Slain";
-                            } else if (action == "undoBossKill") {
-                                keyDesc = bindingUndoBoss.DisplayName;
-                                actionDesc = "Undo Boss Slain";
-                            }
+                            if (action == "add") { keyDesc = bindingAdd.DisplayName; actionDesc = "+1 Death"; }
+                            else if (action == "undo") { keyDesc = bindingUndo.DisplayName; actionDesc = "Undo Death"; }
+                            else if (action == "addBossKill") { keyDesc = bindingAddBoss.DisplayName; actionDesc = "+1 Boss Slain"; }
+                            else if (action == "undoBossKill") { keyDesc = bindingUndoBoss.DisplayName; actionDesc = "Undo Boss Slain"; }
 
-                            instance.LogActivity(string.Format("{0} pressed [{1}] -> sent to OBS! (Death: {2}, Boss Slain: {3})", keyDesc, actionDesc, deathCount, bossCount));
+                            instance.LogActivity(string.Format("{0} [{1}] -> Saved to PC & Live OBS! (Death: {2}, Boss: {3})", keyDesc, actionDesc, curD, curB));
                         }
                     }
                 } catch (Exception ex) {
                     if (instance != null) {
-                        instance.LogActivity(string.Format("Error sending '{0}': {1}", action, ex.Message));
+                        instance.LogActivity(string.Format("Saved to PC (Death: {0}), server sync notice: {1}", curD, ex.Message));
                     }
                 }
             });

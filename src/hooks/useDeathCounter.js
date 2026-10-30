@@ -23,6 +23,7 @@ export function useDeathCounter() {
   const [currentBoss, setCurrentBoss] = useState(() => loadFromStorage('currentBoss', ''));
   const [bossKills, setBossKills] = useState(() => loadFromStorage('bossKills', 0));
   const [history, setHistory] = useState(() => loadFromStorage('history', []));
+  const [lastUpdated, setLastUpdated] = useState(() => loadFromStorage('lastUpdated', 0));
   const [deathAnim, setDeathAnim] = useState(false);
   const [bossSlainAnim, setBossSlainAnim] = useState(false);
 
@@ -41,6 +42,7 @@ export function useDeathCounter() {
     bosses,
     currentBoss,
     history,
+    lastUpdated,
   });
 
   useEffect(() => {
@@ -54,6 +56,7 @@ export function useDeathCounter() {
       bosses,
       currentBoss,
       history,
+      lastUpdated,
     };
   });
 
@@ -87,16 +90,17 @@ export function useDeathCounter() {
       const localSession = loadFromStorage('sessionDeaths', 0);
       const localAllTime = loadFromStorage('allTimeDeaths', 0);
       const localBossKills = loadFromStorage('bossKills', 0);
+      const localLastUpdated = loadFromStorage('lastUpdated', 0);
+      const serverLastUpdated = serverState.lastUpdated || 0;
 
-      // On the controller page, local storage progress is authoritatively preserved on reload.
-      // If local progress is higher than server (e.g. cold serverless instance), seed the server!
-      if (!isOverlay && (localDeaths > (serverState.deaths ?? 0) || localBossKills > (serverState.bossKills ?? 0))) {
+      // If local progress is newer than server (or server is cold at 0 while local has data), seed the server!
+      if (!isOverlay && (localLastUpdated > serverLastUpdated || ((serverState.deaths ?? 0) === 0 && localDeaths > 0))) {
         broadcastUpdate('fullSync', {
           deaths: localDeaths,
           sessionDeaths: localSession,
           allTimeDeaths: localAllTime,
           bossKills: localBossKills,
-          lastUpdated: Date.now(),
+          lastUpdated: localLastUpdated || Date.now(),
         });
         return;
       }
@@ -118,6 +122,7 @@ export function useDeathCounter() {
         saveToStorage('bossKills', serverState.bossKills);
       }
       if (serverState.lastUpdated) {
+        setLastUpdated(serverState.lastUpdated);
         saveToStorage('lastUpdated', serverState.lastUpdated);
       }
       if (serverState.settings) {
@@ -230,20 +235,18 @@ export function useDeathCounter() {
 
           // On the controller, if the user recently performed a local action (within 2.5 seconds),
           // reject background poll to prevent accidental decrementing/rubber-banding
-          if (!isOverlay && timeSinceLocalAction < 2500) {
+          if (!isOverlay && timeSinceLocalAction < 2500 && msg.type === 'pollSync') {
             return;
           }
 
-          // On the controller, background polling must NEVER decrease counts.
-          // This allows global hotkeys from DeathCounterHotkeys.exe to increment counts seamlessly,
-          // while ensuring cold lambdas or network lag never roll back user progress.
-          if (!isOverlay && msg.type === 'pollSync') {
-            if (p.deaths !== undefined && p.deaths < stateRef.current.deaths) {
-              return;
-            }
-            if (p.bossKills !== undefined && p.bossKills < stateRef.current.bossKills) {
-              return;
-            }
+          // If incoming update has an older timestamp than our current local state, do not roll back!
+          if (p.lastUpdated && stateRef.current.lastUpdated && p.lastUpdated < stateRef.current.lastUpdated) {
+            return;
+          }
+
+          if (p.lastUpdated) {
+            setLastUpdated(p.lastUpdated);
+            saveToStorage('lastUpdated', p.lastUpdated);
           }
 
           if (p.deaths !== undefined && p.deaths !== stateRef.current.deaths) {

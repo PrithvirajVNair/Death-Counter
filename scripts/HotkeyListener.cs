@@ -74,6 +74,56 @@ namespace SoulsGameDeathCounter {
         static long lastActionTime = 0;
         static readonly object actionLock = new object();
 
+        static int localDeaths = 0;
+        static int localSessionDeaths = 0;
+        static int localAllTimeDeaths = 0;
+        static long localLastUpdated = 0;
+        static readonly object stateLock = new object();
+        static string localStatePath = "";
+
+        static string GetLocalStatePath() {
+            if (!string.IsNullOrEmpty(localStatePath)) return localStatePath;
+            try {
+                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string dir = Path.Combine(localAppData, "SoulsDeathCounter");
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                localStatePath = Path.Combine(dir, "death-state.json");
+            } catch {
+                localStatePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "death-state.json");
+            }
+            return localStatePath;
+        }
+
+        static void LoadLocalState() {
+            try {
+                string path = GetLocalStatePath();
+                string fallback = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "death-state.json");
+                string usePath = File.Exists(path) ? path : (File.Exists(fallback) ? fallback : null);
+                if (usePath != null) {
+                    string json = File.ReadAllText(usePath);
+                    Match mD = Regex.Match(json, @"""deaths""\s*:\s*(\d+)");
+                    Match mS = Regex.Match(json, @"""sessionDeaths""\s*:\s*(\d+)");
+                    Match mA = Regex.Match(json, @"""allTimeDeaths""\s*:\s*(\d+)");
+                    Match mT = Regex.Match(json, @"""lastUpdated""\s*:\s*(\d+)");
+                    if (mD.Success) int.TryParse(mD.Groups[1].Value, out localDeaths);
+                    if (mS.Success) int.TryParse(mS.Groups[1].Value, out localSessionDeaths);
+                    if (mA.Success) int.TryParse(mA.Groups[1].Value, out localAllTimeDeaths);
+                    if (mT.Success) long.TryParse(mT.Groups[1].Value, out localLastUpdated);
+                }
+            } catch {}
+        }
+
+        static void SaveLocalState() {
+            try {
+                string path = GetLocalStatePath();
+                string json = string.Format(
+                    "{{\n  \"deaths\": {0},\n  \"sessionDeaths\": {1},\n  \"allTimeDeaths\": {2},\n  \"lastUpdated\": {3}\n}}",
+                    localDeaths, localSessionDeaths, localAllTimeDeaths, localLastUpdated
+                );
+                File.WriteAllText(path, json);
+            } catch {}
+        }
+
         static void Log(string msg) {
             try {
                 if (string.IsNullOrEmpty(logFilePath)) {
@@ -107,9 +157,13 @@ namespace SoulsGameDeathCounter {
             }
 
             ReadConfig();
+            LoadLocalState();
 
             Log("Data file path: " + dataFilePath + " (Exists: " + File.Exists(dataFilePath) + ")");
             Log("Target Server URL: " + serverUrl);
+            if (localDeaths > 0) {
+                Log("Loaded previous local score from PC: " + localDeaths + " Deaths");
+            }
 
             // Background config watcher
             Thread configThread = new Thread(new ThreadStart(ConfigWatchLoop));
@@ -214,7 +268,28 @@ namespace SoulsGameDeathCounter {
                 lastActionTime = now;
             }
 
-            Log(string.Format("Global key triggered '{0}'. Target: {1}", action, serverUrl));
+            int curD, curS, curA;
+            long curT;
+
+            lock (stateLock) {
+                if (action == "add") {
+                    localDeaths++;
+                    localSessionDeaths++;
+                    localAllTimeDeaths++;
+                } else if (action == "undo") {
+                    if (localDeaths > 0) localDeaths--;
+                    if (localSessionDeaths > 0) localSessionDeaths--;
+                }
+                localLastUpdated = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+                SaveLocalState();
+
+                curD = localDeaths;
+                curS = localSessionDeaths;
+                curA = localAllTimeDeaths;
+                curT = localLastUpdated;
+            }
+
+            Log(string.Format("Global key triggered '{0}'. Local Deaths={1}. Target={2}", action, curD, serverUrl));
 
             // Execute HTTP call asynchronously so keyboard hook is never blocked
             ThreadPool.QueueUserWorkItem(delegate {
@@ -222,7 +297,11 @@ namespace SoulsGameDeathCounter {
                     using (WebClient client = new WebClient()) {
                         client.Headers[HttpRequestHeader.ContentType] = "application/json";
                         string endpoint = serverUrl.TrimEnd('/') + "/api/action";
-                        string res = client.UploadString(endpoint, "POST", "{\"action\":\"" + action + "\"}");
+                        string payload = string.Format(
+                            "{{\"action\":\"{0}\",\"deaths\":{1},\"sessionDeaths\":{2},\"allTimeDeaths\":{3},\"lastUpdated\":{4}}}",
+                            action, curD, curS, curA, curT
+                        );
+                        string res = client.UploadString(endpoint, "POST", payload);
                         Log("Action '" + action + "' response: " + res);
                     }
                 } catch (Exception ex) {

@@ -51,7 +51,7 @@ export default async function handler(req, res) {
       // ─── 1. Action Handler (by URL path or by presence of body.action) ───
       if (isActionPath || body.action) {
         const rawAction = body.action || 'add';
-        const { state, normAction } = applyAction(rawAction, body.value);
+        const { state, normAction } = applyAction(rawAction, body.value, body);
         return res.status(200).json({
           ok: true,
           action: normAction,

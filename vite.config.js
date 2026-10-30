@@ -112,7 +112,8 @@ function deathCounterSyncPlugin() {
       req.on('data', (chunk) => { body += chunk })
       req.on('end', () => {
         try {
-          const { action } = JSON.parse(body)
+          const parsedBody = JSON.parse(body || '{}')
+          const action = parsedBody.action || 'add'
           const now = Date.now()
           const normAction = (action === 'add' || action === 'addDeath') ? 'add'
             : (action === 'undo' || action === 'undoDeath') ? 'undo'
@@ -134,7 +135,42 @@ function deathCounterSyncPlugin() {
           }
           lastActionTimes[normAction] = now
 
-          if (action === 'add' || action === 'addDeath') {
+          const actionTimestamp = parsedBody.lastUpdated || now
+          state.lastUpdated = Math.max(actionTimestamp, state.lastUpdated || 0)
+
+          // If caller provided authoritative counts with fresh timestamp:
+          if (parsedBody.deaths !== undefined && (!state.lastUpdated || actionTimestamp >= state.lastUpdated)) {
+            state.deaths = Math.max(0, parseInt(parsedBody.deaths, 10) || 0)
+            if (parsedBody.sessionDeaths !== undefined) state.sessionDeaths = Math.max(0, parseInt(parsedBody.sessionDeaths, 10) || 0)
+            if (parsedBody.allTimeDeaths !== undefined) state.allTimeDeaths = Math.max(0, parseInt(parsedBody.allTimeDeaths, 10) || 0)
+            if (parsedBody.bossKills !== undefined) state.bossKills = Math.max(0, parseInt(parsedBody.bossKills, 10) || 0)
+            state.history = [
+              ...(state.history || []).slice(-99),
+              { action: normAction, timestamp: actionTimestamp, value: state.deaths },
+            ]
+            persist()
+
+            broadcastSSE({
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              type: (normAction === 'addBossKill' || normAction === 'undoBossKill') ? 'bossKills' : 'deaths',
+              payload: {
+                deaths: state.deaths,
+                sessionDeaths: state.sessionDeaths,
+                allTimeDeaths: state.allTimeDeaths,
+                bossKills: state.bossKills || 0,
+                history: state.history,
+                lastUpdated: state.lastUpdated,
+                triggerAnim: normAction === 'add' || normAction === 'addBossKill',
+              },
+              timestamp: Date.now(),
+            })
+
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({ ok: true, action: normAction, deaths: state.deaths, bossKills: state.bossKills || 0, lastUpdated: state.lastUpdated }))
+            return
+          }
+
+          if (normAction === 'add') {
             state.deaths += 1
             state.sessionDeaths += 1
             state.allTimeDeaths += 1
@@ -153,15 +189,16 @@ function deathCounterSyncPlugin() {
                 allTimeDeaths: state.allTimeDeaths,
                 bossKills: state.bossKills || 0,
                 history: state.history,
+                lastUpdated: state.lastUpdated,
                 triggerAnim: true,
               },
               timestamp: Date.now(),
             })
 
             res.setHeader('Content-Type', 'application/json')
-            res.end(JSON.stringify({ ok: true, action: 'add', deaths: state.deaths, bossKills: state.bossKills || 0 }))
+            res.end(JSON.stringify({ ok: true, action: 'add', deaths: state.deaths, bossKills: state.bossKills || 0, lastUpdated: state.lastUpdated }))
             return
-          } else if (action === 'undo' || action === 'undoDeath') {
+          } else if (normAction === 'undo') {
             if (state.deaths > 0) {
               state.deaths -= 1
               state.sessionDeaths = Math.max(0, state.sessionDeaths - 1)
@@ -247,6 +284,13 @@ function deathCounterSyncPlugin() {
         try {
           const payload = JSON.parse(body)
 
+          const updateTimestamp = payload.lastUpdated || Date.now()
+          if (payload.lastUpdated && state.lastUpdated && payload.lastUpdated < state.lastUpdated) {
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({ ok: true, state, skippedOlder: true }))
+            return
+          }
+
           if (payload.deaths !== undefined) state.deaths = payload.deaths
           if (payload.sessionDeaths !== undefined) state.sessionDeaths = payload.sessionDeaths
           if (payload.allTimeDeaths !== undefined) state.allTimeDeaths = payload.allTimeDeaths
@@ -256,6 +300,7 @@ function deathCounterSyncPlugin() {
           if (payload.shortcuts) state.shortcuts = { ...state.shortcuts, ...payload.shortcuts }
           if (payload.bosses) state.bosses = { ...state.bosses, ...payload.bosses }
           if (payload.currentBoss !== undefined) state.currentBoss = payload.currentBoss
+          state.lastUpdated = Math.max(updateTimestamp, state.lastUpdated || 0)
 
           persist()
 

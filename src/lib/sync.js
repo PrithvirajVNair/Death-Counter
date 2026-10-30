@@ -72,7 +72,7 @@ export function broadcastUpdate(type, payload) {
       type,
       ...payload,
       triggerAnim: payload?.triggerAnim || false,
-      lastUpdated: Date.now(),
+      lastUpdated: payload?.lastUpdated || Date.now(),
     };
     fetch('/api/state', {
       method: 'POST',

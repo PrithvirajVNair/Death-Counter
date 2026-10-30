@@ -69,6 +69,12 @@ export function getState() {
 
 export function updateState(partial = {}) {
   const current = getState();
+  const updateTimestamp = partial.lastUpdated || Date.now();
+
+  // If incoming state is strictly older than current server state, do not roll back!
+  if (partial.lastUpdated && current.lastUpdated && partial.lastUpdated < current.lastUpdated) {
+    return current;
+  }
 
   const next = {
     ...current,
@@ -85,7 +91,7 @@ export function updateState(partial = {}) {
       ...current.bosses,
       ...(partial.bosses || {}),
     },
-    lastUpdated: Math.max(Date.now(), partial.lastUpdated || 0),
+    lastUpdated: Math.max(updateTimestamp, current.lastUpdated || 0),
   };
 
   globalThis.__DEATH_COUNTER_STATE__ = next;
@@ -93,9 +99,9 @@ export function updateState(partial = {}) {
   return next;
 }
 
-export function applyAction(rawAction, value) {
+export function applyAction(rawAction, value, extra = {}) {
   const state = getState();
-  const now = Date.now();
+  const now = extra.lastUpdated || Date.now();
 
   const normAction =
     rawAction === 'add' || rawAction === 'addDeath' ? 'add'
@@ -106,35 +112,54 @@ export function applyAction(rawAction, value) {
     : rawAction === 'setBossKill' ? 'setBossKill'
     : rawAction;
 
-  if (normAction === 'add') {
-    state.deaths += 1;
-    state.sessionDeaths += 1;
-    state.allTimeDeaths += 1;
+  // If the caller provided authoritative counts with a newer or equal timestamp:
+  if (extra.deaths !== undefined && (!state.lastUpdated || now >= state.lastUpdated)) {
+    state.deaths = Math.max(0, parseInt(extra.deaths, 10) || 0);
+    if (extra.sessionDeaths !== undefined) {
+      state.sessionDeaths = Math.max(0, parseInt(extra.sessionDeaths, 10) || 0);
+    }
+    if (extra.allTimeDeaths !== undefined) {
+      state.allTimeDeaths = Math.max(0, parseInt(extra.allTimeDeaths, 10) || 0);
+    }
+    if (extra.bossKills !== undefined) {
+      state.bossKills = Math.max(0, parseInt(extra.bossKills, 10) || 0);
+    }
     state.history = [
       ...(state.history || []).slice(-99),
-      { action: 'add', timestamp: now, value: state.deaths },
+      { action: normAction, timestamp: now, value: state.deaths },
     ];
-  } else if (normAction === 'undo') {
-    if (state.deaths > 0) state.deaths -= 1;
-    if (state.sessionDeaths > 0) state.sessionDeaths -= 1;
-    state.history = [
-      ...(state.history || []).slice(-99),
-      { action: 'undo', timestamp: now, value: state.deaths },
-    ];
-  } else if (normAction === 'addBossKill') {
-    state.bossKills += 1;
-  } else if (normAction === 'undoBossKill') {
-    if (state.bossKills > 0) state.bossKills -= 1;
-  } else if (normAction === 'setDeath') {
-    const num = Math.max(0, parseInt(value, 10) || 0);
-    state.deaths = num;
-    state.sessionDeaths = num;
-  } else if (normAction === 'setBossKill') {
-    const num = Math.max(0, parseInt(value, 10) || 0);
-    state.bossKills = num;
+  } else {
+    // Standard relative action mutation
+    if (normAction === 'add') {
+      state.deaths += 1;
+      state.sessionDeaths += 1;
+      state.allTimeDeaths += 1;
+      state.history = [
+        ...(state.history || []).slice(-99),
+        { action: 'add', timestamp: now, value: state.deaths },
+      ];
+    } else if (normAction === 'undo') {
+      if (state.deaths > 0) state.deaths -= 1;
+      if (state.sessionDeaths > 0) state.sessionDeaths -= 1;
+      state.history = [
+        ...(state.history || []).slice(-99),
+        { action: 'undo', timestamp: now, value: state.deaths },
+      ];
+    } else if (normAction === 'addBossKill') {
+      state.bossKills += 1;
+    } else if (normAction === 'undoBossKill') {
+      if (state.bossKills > 0) state.bossKills -= 1;
+    } else if (normAction === 'setDeath') {
+      const num = Math.max(0, parseInt(value, 10) || 0);
+      state.deaths = num;
+      state.sessionDeaths = num;
+    } else if (normAction === 'setBossKill') {
+      const num = Math.max(0, parseInt(value, 10) || 0);
+      state.bossKills = num;
+    }
   }
 
-  state.lastUpdated = now;
+  state.lastUpdated = Math.max(now, state.lastUpdated || 0);
   globalThis.__DEATH_COUNTER_STATE__ = state;
   writeDiskCache(state);
 

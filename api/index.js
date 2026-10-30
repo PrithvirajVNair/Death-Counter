@@ -1,4 +1,4 @@
-import { getState, updateState, applyAction, resetState } from './_db.js';
+import { getState, updateState, applyAction, resetState, getSupabase } from './_db.js';
 
 async function parseBody(req) {
   if (req.body !== undefined && req.body !== null && req.body !== '') {
@@ -108,6 +108,30 @@ export default async function handler(req, res) {
 
     // ─── 4. State Retrieval Handler (GET) ───
     if (req.method === 'GET') {
+      const sb = getSupabase();
+      if (sb && queryChannel) {
+        try {
+          const { data, error } = await sb
+            .from('streamer_states')
+            .select('*')
+            .eq('streamer_key', queryChannel)
+            .maybeSingle();
+
+          if (!error && data) {
+            return res.status(200).json({
+              deaths: data.deaths ?? 0,
+              sessionDeaths: data.session_deaths ?? 0,
+              allTimeDeaths: data.all_time_deaths ?? 0,
+              bossKills: data.boss_kills ?? 0,
+              settings: data.settings || {},
+              shortcuts: data.shortcuts || {},
+              bosses: data.bosses || {},
+              currentBoss: data.current_boss || '',
+              lastUpdated: data.last_updated ?? 0,
+            });
+          }
+        } catch {}
+      }
       return res.status(200).json(getState(queryChannel));
     }
 

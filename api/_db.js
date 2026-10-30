@@ -91,8 +91,7 @@ function saveToSupabaseAsync(channel, state) {
   const sb = getSupabase();
   if (!sb) return;
   try {
-    sb.from('streamer_states').upsert({
-      streamer_key: channel,
+    sb.from('streamer_states').update({
       deaths: state.deaths ?? 0,
       session_deaths: state.sessionDeaths ?? 0,
       all_time_deaths: state.allTimeDeaths ?? 0,
@@ -101,8 +100,14 @@ function saveToSupabaseAsync(channel, state) {
       shortcuts: state.shortcuts || {},
       last_updated: state.lastUpdated || Date.now(),
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'streamer_key' }).then(() => {}).catch(() => {});
-  } catch {}
+    }).eq('streamer_key', channel).then(({ error }) => {
+      if (error) console.error('Supabase update streamer_states error:', error);
+    }).catch((err) => {
+      console.error('Supabase update catch:', err);
+    });
+  } catch (err) {
+    console.error('Failed to trigger update in Supabase:', err);
+  }
 }
 
 export function updateState(partial = {}, channel = '') {

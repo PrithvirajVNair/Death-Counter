@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
-import { validateRemoteToken } from '../lib/supabase';
+import { validateRemoteToken, updateStreamerStateRemote, supabase } from '../lib/supabase';
 import { Shield, Skull, Trophy, RotateCcw, Edit3, Clock, AlertTriangle, Check, ExternalLink, Zap } from 'lucide-react';
 import Embers from '../components/Embers';
 import '../styles/remote.css';
@@ -44,9 +44,30 @@ export default function RemoteControl() {
 
   const streamerKey = tokenInfo?.streamerKey;
 
-  // 2. Fetch & Poll streamer state
+  // 2. Fetch & Poll streamer state directly from Supabase + API fallback
   const fetchState = useCallback(async () => {
     if (!streamerKey) return;
+
+    // 1. Direct Supabase check
+    if (supabase) {
+      try {
+        const { data, error } = await supabase
+          .from('streamer_states')
+          .select('deaths, session_deaths, all_time_deaths, boss_kills')
+          .eq('streamer_key', streamerKey)
+          .maybeSingle();
+
+        if (!error && data) {
+          if (data.deaths !== undefined) setDeaths(data.deaths);
+          if (data.session_deaths !== undefined) setSessionDeaths(data.session_deaths);
+          if (data.all_time_deaths !== undefined) setAllTimeDeaths(data.all_time_deaths);
+          if (data.boss_kills !== undefined) setBossKills(data.boss_kills);
+          return;
+        }
+      } catch {}
+    }
+
+    // 2. Fallback to API
     try {
       const res = await fetch(`/api/state?key=${encodeURIComponent(streamerKey)}&_t=${Date.now()}`, {
         cache: 'no-store',
@@ -82,32 +103,60 @@ export default function RemoteControl() {
     setTimeout(() => setToastMsg(''), 2200);
   };
 
-  // Action Dispatcher
+  // Action Dispatcher: updates both Supabase table and backend API
   const sendAction = async (action, extra = {}) => {
     if (!streamerKey) return;
     triggerHaptic([30]);
 
+    let nextDeaths = deaths;
+    let nextSession = sessionDeaths;
+    let nextAllTime = allTimeDeaths;
+    let nextBossKills = bossKills;
+
     if (action === 'add' || action === 'addDeath') {
-      setDeaths((d) => d + 1);
-      setSessionDeaths((s) => s + 1);
-      setAllTimeDeaths((a) => a + 1);
+      nextDeaths = deaths + 1;
+      nextSession = sessionDeaths + 1;
+      nextAllTime = allTimeDeaths + 1;
+      setDeaths(nextDeaths);
+      setSessionDeaths(nextSession);
+      setAllTimeDeaths(nextAllTime);
       setAnimDeath(true);
       setTimeout(() => setAnimDeath(false), 600);
       showToast('+1 Death sent to streamer!');
     } else if (action === 'undo' || action === 'undoDeath') {
-      setDeaths((d) => Math.max(0, d - 1));
-      setSessionDeaths((s) => Math.max(0, s - 1));
+      nextDeaths = Math.max(0, deaths - 1);
+      nextSession = Math.max(0, sessionDeaths - 1);
+      setDeaths(nextDeaths);
+      setSessionDeaths(nextSession);
       showToast('Death Undone!');
     } else if (action === 'addBossKill') {
-      setBossKills((b) => b + 1);
+      nextBossKills = bossKills + 1;
+      setBossKills(nextBossKills);
       setAnimBoss(true);
       setTimeout(() => setAnimBoss(false), 900);
       showToast('+1 Boss Slain sent to streamer!');
     } else if (action === 'undoBossKill') {
-      setBossKills((b) => Math.max(0, b - 1));
+      nextBossKills = Math.max(0, bossKills - 1);
+      setBossKills(nextBossKills);
       showToast('Boss Slain Undone!');
+    } else if (action === 'setCount') {
+      nextDeaths = Math.max(0, extra.deaths ?? deaths);
+      nextSession = Math.max(0, extra.sessionDeaths ?? sessionDeaths);
+      nextAllTime = Math.max(0, extra.allTimeDeaths ?? allTimeDeaths);
+    } else if (action === 'setBossCount') {
+      nextBossKills = Math.max(0, extra.bossKills ?? bossKills);
     }
 
+    // 1. Direct Supabase Table Update
+    updateStreamerStateRemote(streamerKey, {
+      deaths: nextDeaths,
+      session_deaths: nextSession,
+      all_time_deaths: nextAllTime,
+      boss_kills: nextBossKills,
+      last_updated: Date.now(),
+    });
+
+    // 2. Broadcast via API
     try {
       await fetch(`/api/action?key=${encodeURIComponent(streamerKey)}`, {
         method: 'POST',
@@ -116,6 +165,10 @@ export default function RemoteControl() {
           action,
           key: streamerKey,
           token,
+          deaths: nextDeaths,
+          sessionDeaths: nextSession,
+          allTimeDeaths: nextAllTime,
+          bossKills: nextBossKills,
           ...extra,
         }),
       });

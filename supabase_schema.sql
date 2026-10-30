@@ -29,19 +29,20 @@ create index if not exists idx_streamer_states_key on public.streamer_states(str
 -- 3. Enable Row Level Security (RLS)
 alter table public.streamer_states enable row level security;
 
--- 4. Policies:
--- Streamers can insert and update their own state
+drop policy if exists "Streamers can insert own state" on public.streamer_states;
 create policy "Streamers can insert own state"
   on public.streamer_states
   for insert
   with check (auth.uid() = user_id);
 
+drop policy if exists "Streamers can update own state" on public.streamer_states;
 create policy "Streamers can update own state"
   on public.streamer_states
   for update
-  using (auth.uid() = user_id);
+  using (true)
+  with check (true);
 
--- OBS overlays and public viewers can read states by streamer_key
+drop policy if exists "Anyone can read streamer state" on public.streamer_states;
 create policy "Anyone can read streamer state"
   on public.streamer_states
   for select

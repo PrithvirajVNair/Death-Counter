@@ -1,7 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+const supabaseUrl =
+  import.meta.env.VITE_SUPABASE_URL ||
+  "https://sexlwhkcropcrdewarmr.supabase.co";
+const supabaseAnonKey =
+  import.meta.env.VITE_SUPABASE_ANON_KEY ||
+  "sb_publishable_u3waObuvRCSxPW7AN42bvg_fmP32lF2";
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
@@ -202,8 +206,8 @@ export async function createRemoteToken(user, { label = 'Friend Access', duratio
     ? new Date(Date.now() + durationHours * 3600 * 1000).toISOString()
     : null;
 
-  const tokenRecord = {
-    id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `tok_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+  // Do NOT pass manual non-UUID id string so Postgres auto-generates gen_random_uuid()
+  const insertPayload = {
     user_id: user.id,
     streamer_key: streamerKey,
     streamer_name: streamerName,
@@ -211,25 +215,37 @@ export async function createRemoteToken(user, { label = 'Friend Access', duratio
     label: (label && label.trim()) || 'Friend Access',
     expires_at: expiresAt,
     is_revoked: false,
-    created_at: new Date().toISOString(),
   };
 
   // 1. Try Supabase streamer_remote_tokens table
   if (supabase) {
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('streamer_remote_tokens')
-        .insert(tokenRecord);
-      if (!error) {
-        saveLocalTokenBackup(user.id, tokenRecord);
-        return tokenRecord;
+        .insert(insertPayload)
+        .select()
+        .single();
+
+      if (!error && data) {
+        saveLocalTokenBackup(user.id, data);
+        return data;
       }
-    } catch {}
+      if (error) {
+        console.warn('Supabase remote token insert warning:', error);
+      }
+    } catch (err) {
+      console.warn('Failed to insert token into Supabase:', err);
+    }
   }
 
   // 2. Fallback to localStorage
-  saveLocalTokenBackup(user.id, tokenRecord);
-  return tokenRecord;
+  const fallbackRecord = {
+    ...insertPayload,
+    id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `tok_${Date.now()}`,
+    created_at: new Date().toISOString(),
+  };
+  saveLocalTokenBackup(user.id, fallbackRecord);
+  return fallbackRecord;
 }
 
 function saveLocalTokenBackup(userId, tokenRecord) {
@@ -383,3 +399,29 @@ export async function validateRemoteToken(token) {
 
   return { valid: false, reason: 'invalid' };
 }
+
+/**
+ * Update streamer state from remote friend link directly in Supabase
+ */
+export async function updateStreamerStateRemote(streamerKey, stateUpdate) {
+  if (!supabase || !streamerKey) return null;
+  try {
+    const payload = {
+      ...stateUpdate,
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await supabase
+      .from('streamer_states')
+      .update(payload)
+      .eq('streamer_key', streamerKey)
+      .select();
+
+    if (!error && data && data.length > 0) {
+      return data[0];
+    }
+  } catch (err) {
+    console.warn('Direct remote Supabase update failed:', err);
+  }
+  return null;
+}
+

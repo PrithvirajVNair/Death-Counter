@@ -142,6 +142,11 @@ export default function Overlay() {
     const bossParam = searchParams.get('boss');
     if (bossParam !== null) merged.bossAttemptsInOverlay = bossParam === 'true' || bossParam === '1';
 
+    const transParam = searchParams.get('transparent');
+    if (transParam !== null) {
+      merged.transparentBg = transParam === 'true' || transParam === '1';
+    }
+
     return merged;
   }, [settings, searchParams]);
 

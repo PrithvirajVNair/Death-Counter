@@ -37,6 +37,7 @@ export const DEFAULT_SETTINGS = {
   bossAttemptsInOverlay: false,
   showBossKills: false,
   overlayMode: 'deaths',
+  transparentBg: true,
 };
 
 export const DEFAULT_SHORTCUTS = {

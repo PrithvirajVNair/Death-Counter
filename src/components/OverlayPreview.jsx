@@ -6,37 +6,43 @@ import DeathCounter from './DeathCounter';
 export default function OverlayPreview({
   deaths,
   bossKills = 0,
-  settings,
+  settings = {},
   deathAnim,
   bossSlainAnim,
   sessionDeaths,
   currentBoss,
   bossAttempts,
+  onUpdateSettings,
   transparentBg,
   onToggleTransparent,
   streamerKey,
 }) {
   const [previewMode, setPreviewMode] = useState('deaths'); // 'deaths' | 'boss-slain' | 'both'
 
+  const isTransparent = settings?.transparentBg !== false && transparentBg !== false;
+
   const effectivePreviewSettings = useMemo(() => {
     return {
       ...settings,
       overlayMode: previewMode,
       showBossKills: previewMode === 'both',
+      transparentBg: isTransparent,
     };
-  }, [settings, previewMode]);
+  }, [settings, previewMode, isTransparent]);
 
   const origin = typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('undefined')
     ? window.location.origin
     : 'https://soulgamedc-rosy.vercel.app';
+
   const currentPreviewObsUrl = useMemo(() => {
     const preset = settings?.preset || 'classic-rune';
     const colorParam = settings?.goldColor ? `&goldColor=${encodeURIComponent(settings.goldColor)}` : '';
     const keyParam = streamerKey ? `&key=${encodeURIComponent(streamerKey)}` : '';
-    if (previewMode === 'boss-slain') return `${origin}/overlay?preset=${preset}&mode=boss-slain${colorParam}${keyParam}`;
-    if (previewMode === 'both') return `${origin}/overlay?preset=${preset}&bossKills=true${colorParam}${keyParam}`;
-    return `${origin}/overlay?preset=${preset}${colorParam}${keyParam}`;
-  }, [origin, settings?.preset, settings?.goldColor, previewMode, streamerKey]);
+    const transParam = !isTransparent ? '&transparent=false' : '';
+    if (previewMode === 'boss-slain') return `${origin}/overlay?preset=${preset}&mode=boss-slain${colorParam}${keyParam}${transParam}`;
+    if (previewMode === 'both') return `${origin}/overlay?preset=${preset}&bossKills=true${colorParam}${keyParam}${transParam}`;
+    return `${origin}/overlay?preset=${preset}${colorParam}${keyParam}${transParam}`;
+  }, [origin, settings?.preset, settings?.goldColor, isTransparent, previewMode, streamerKey]);
 
   const handleCopyCurrentUrl = () => {
     navigator.clipboard.writeText(currentPreviewObsUrl).then(
@@ -46,6 +52,15 @@ export default function OverlayPreview({
       },
       () => showToast('Failed to copy URL', 'error')
     );
+  };
+
+  const handleToggleTransparent = (checked) => {
+    if (onUpdateSettings) {
+      onUpdateSettings({ transparentBg: checked });
+    }
+    if (onToggleTransparent) {
+      onToggleTransparent(checked);
+    }
   };
 
   return (
@@ -98,17 +113,18 @@ export default function OverlayPreview({
           >
             <ExternalLink size={12} />
           </button>
-          <label className="overlay-preview__toggle">
+          <label className="overlay-preview__toggle" title="Toggle between transparent floating runes and solid dark frame box">
             <input
               type="checkbox"
-              checked={transparentBg}
-              onChange={(e) => onToggleTransparent(e.target.checked)}
+              id="chk-transparent-bg"
+              checked={isTransparent}
+              onChange={(e) => handleToggleTransparent(e.target.checked)}
             />
             <span className="overlay-preview__toggle-label">Transparent BG</span>
           </label>
         </div>
       </div>
-      <div className={`overlay-preview__canvas ${transparentBg ? 'overlay-preview__canvas--transparent' : ''}`}>
+      <div className={`overlay-preview__canvas ${isTransparent ? 'overlay-preview__canvas--transparent' : ''}`}>
         <DeathCounter
           deaths={deaths}
           bossKills={bossKills}

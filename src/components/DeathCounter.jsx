@@ -45,7 +45,7 @@ export default function DeathCounter({
 
   return (
     <div
-      className={`death-counter-root ${isBossMode ? 'death-counter-root--boss-mode' : ''}`}
+      className={`death-counter-root ${isBossMode ? 'death-counter-root--boss-mode' : ''} ${settings.transparentBg === false ? 'death-counter-root--solid-bg' : ''}`}
       style={{
         transform: `scale(${scale})`,
         transformOrigin: 'top left',

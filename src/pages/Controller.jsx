@@ -18,7 +18,6 @@ import '../styles/auth.css';
 export default function Controller() {
   const counter = useDeathCounter();
   const { user, loading: authLoading, streamerKey, signOut, saveCloudState } = useAuth();
-  const [transparentPreview, setTransparentPreview] = useState(false);
   const [copiedKey, setCopiedKey] = useState(false);
   const [showStreamerKey, setShowStreamerKey] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
@@ -317,8 +316,9 @@ export default function Controller() {
             deathAnim={deathAnim}
             bossSlainAnim={bossSlainAnim}
             sessionDeaths={sessionDeaths}
-            transparentBg={transparentPreview}
-            onToggleTransparent={setTransparentPreview}
+            currentBoss={currentBoss}
+            bossAttempts={bossAttempts}
+            onUpdateSettings={updateSettings}
             streamerKey={streamerKey}
           />
 

@@ -346,8 +346,9 @@
 }
 
 .overlay-preview__canvas--transparent {
-  background:
-    repeating-conic-gradient(#1a1a1a 0% 25%, #111 0% 50%) 50% / 20px 20px;
+  background: repeating-conic-gradient(#272822 0% 25%, #151613 0% 50%) 50% / 20px 20px;
+  border-top: 1px dashed rgba(200, 166, 93, 0.25);
+  border-bottom: 1px dashed rgba(200, 166, 93, 0.25);
 }
 
 /* ─── Preset Selector ─── */

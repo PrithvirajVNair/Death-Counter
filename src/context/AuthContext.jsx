@@ -8,7 +8,6 @@ import {
   signOutUser,
   saveCloudState,
   saveCloudConfig,
-  requestCompanionToken,
   regenerateStreamerKey,
 } from "../lib/supabase";
 import { clearAllStorage } from "../lib/storage";
@@ -38,20 +37,6 @@ export function AuthProvider({ children }) {
 
       if (!session?.user) {
         clearAllStorage();
-      }
-
-      // Auto-connect to local desktop app if running locally over HTTP (avoids browser loopback CORS warning on HTTPS)
-      if (session?.user && typeof window !== "undefined" && window.location.protocol === "http:") {
-        const key = getStreamerKey(session.user);
-        try {
-          fetch(
-            `http://127.0.0.1:4455/api/auth?key=${encodeURIComponent(key)}&name=${encodeURIComponent(session.user.user_metadata?.full_name || session.user.email || "Google User")}`,
-            {
-              method: "POST",
-              mode: "no-cors",
-            },
-          ).catch(() => {});
-        } catch {}
       }
     });
 
@@ -92,7 +77,6 @@ export function AuthProvider({ children }) {
     regenerateKey: handleRegenerateKey,
     saveCloudState: (state) => saveCloudState(user, state),
     saveCloudConfig: (config) => saveCloudConfig(user, config),
-    requestCompanionToken: () => requestCompanionToken(streamerKey),
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

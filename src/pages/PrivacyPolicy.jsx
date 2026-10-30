@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShieldCheck, ArrowLeft, Lock, Database, EyeOff, Terminal, Scale } from 'lucide-react';
+import { ShieldCheck, ArrowLeft, Lock, Database, EyeOff, Scale } from 'lucide-react';
 import '../styles/global.css';
 import '../styles/legal.css';
 
@@ -47,7 +47,7 @@ export default function PrivacyPolicy() {
               We firmly believe you should not have to sacrifice privacy to track your gaming journey.
             </p>
             <ul className="legal-list">
-              <li><strong>No User Accounts:</strong> You do not need an email, password, or registration to use this tool.</li>
+              <li><strong>No User Accounts:</strong> You do not need an email, password, or registration to use this tool locally.</li>
               <li><strong>No Advertisements:</strong> We do not run ad networks, marketing pixels, or third-party behavioral trackers.</li>
               <li><strong>No Personal Data Harvesting:</strong> We do not log IP addresses, names, locations, or hardware fingerprints.</li>
             </ul>
@@ -77,36 +77,8 @@ export default function PrivacyPolicy() {
 
           <section className="legal-section">
             <h2 className="legal-section__title">
-              <Terminal size={18} color="var(--gold)" />
-              3. PC Hotkey Companion App Security
-            </h2>
-            <p>
-              For players running fullscreen games, an optional companion utility (<code>DeathCounterHotkeys.exe</code>)
-              is provided to intercept global keyboard shortcuts:
-            </p>
-            <ul className="legal-list">
-              <li>
-                <strong>Strict Key Filtering:</strong> The companion app utilizes standard Windows Low-Level Keyboard hooks. It inspects key codes
-                <strong> exclusively</strong> to match your assigned hotkeys (default: F8 for Add Death, F7 for Undo).
-              </li>
-              <li>
-                <strong>No Keylogging:</strong> The app does not record, buffer, or transmit keystrokes, passwords, or personal inputs.
-              </li>
-              <li>
-                <strong>Outbound Transmission Only:</strong> When your chosen hotkey is pressed, the app sends a single lightweight payload
-                (<code>&#123;&quot;action&quot;: &quot;add&quot;&#125;</code>) directly to your overlay sync URL.
-              </li>
-              <li>
-                <strong>100% Auditable Source Code:</strong> The entire C# source file (<code>HotkeyListenerApp.cs</code>) is completely open-source
-                and inspectable on GitHub.
-              </li>
-            </ul>
-          </section>
-
-          <section className="legal-section">
-            <h2 className="legal-section__title">
               <Lock size={18} color="var(--gold)" />
-              4. Cookies & Local Storage
+              3. Cookies & Local Storage
             </h2>
             <p>
               We do not use tracking or advertising cookies. We utilize standard HTML5 <code>localStorage</code> solely to preserve
@@ -118,7 +90,7 @@ export default function PrivacyPolicy() {
           <section className="legal-section">
             <h2 className="legal-section__title">
               <Scale size={18} color="var(--gold)" />
-              5. Open-Source Transparency & Contact
+              4. Open-Source Transparency & Contact
             </h2>
             <p>
               This project is published under the open-source MIT License. You are welcome to audit, fork, or self-host

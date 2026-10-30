@@ -5,7 +5,6 @@ import {
   resetState,
   verifyStreamerAuth,
   validateModeratorToken,
-  createCompanionToken,
 } from './_db.js';
 
 const ALLOWED_ACTIONS = new Set([
@@ -184,7 +183,7 @@ export default async function handler(req, res) {
   // CORS & Security headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Moderator-Token, X-Companion-Token, X-Operation-Id, X-Requested-With');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Moderator-Token, X-Operation-Id, X-Requested-With');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Referrer-Policy', 'no-referrer');
 
@@ -201,7 +200,6 @@ export default async function handler(req, res) {
     const isActionPath = pathname.endsWith('/action') || pathname.includes('/action');
     const isResetPath = pathname.endsWith('/reset') || pathname.includes('/reset');
     const isValidateTokenPath = pathname.endsWith('/validate-token') || pathname.includes('/validate-token');
-    const isPairCompanionPath = pathname.endsWith('/pair-companion') || pathname.includes('/pair-companion');
 
     const queryToken = (url.searchParams.get('token') || '').trim();
     const queryKey = (url.searchParams.get('key') || url.searchParams.get('streamerKey') || url.searchParams.get('channel') || '').trim();
@@ -220,7 +218,7 @@ export default async function handler(req, res) {
 
       let rawTokenToValidate = queryToken;
       if (req.method === 'POST') {
-        const headerToken = req.headers['x-moderator-token'] || req.headers['x-companion-token'];
+        const headerToken = req.headers['x-moderator-token'];
         if (headerToken) {
           rawTokenToValidate = String(headerToken).trim();
         } else {
@@ -319,43 +317,18 @@ export default async function handler(req, res) {
 
     // ─── Authentication & Authorization Verification ───
     const authHeader = req.headers['authorization'] || '';
-    const companionHeader = (req.headers['x-companion-token'] || '').trim();
     const moderatorHeader = (req.headers['x-moderator-token'] || '').trim();
     const legacyBodyToken = (body.token ? String(body.token).trim() : '');
     const legacyQueryToken = (queryToken || '').trim();
     const explicitKey = (body.key || body.streamerKey || body.channel || queryKey || '').trim();
 
     let authorizedStreamerKey = null;
-    let authType = null; // 'streamer' | 'companion' | 'moderator'
+    let authType = null; // 'streamer' | 'moderator'
     let moderatorPermissions = null;
     let activeToken = '';
 
-    // 1. Companion Token Authentication via X-Companion-Token
-    if (companionHeader) {
-      activeToken = companionHeader;
-      const tokenResult = await validateModeratorToken(companionHeader);
-      if (!tokenResult.valid) {
-        return res.status(401).json({
-          success: false,
-          ok: false,
-          error: { code: 'INVALID_TOKEN', message: `Companion token is ${tokenResult.reason}.` },
-        });
-      }
-
-      if (explicitKey && explicitKey !== tokenResult.streamerKey) {
-        return res.status(403).json({
-          success: false,
-          ok: false,
-          error: { code: 'FORBIDDEN', message: 'Supplied companion token does not match the requested streamer.' },
-        });
-      }
-
-      authorizedStreamerKey = tokenResult.streamerKey;
-      authType = 'companion';
-      moderatorPermissions = tokenResult.permissions;
-    }
-    // 2. Remote Moderator Token Authentication via X-Moderator-Token (or legacy body/query fallback)
-    else if (moderatorHeader || legacyBodyToken || legacyQueryToken) {
+    // 1. Remote Moderator Token Authentication via X-Moderator-Token (or legacy body/query fallback)
+    if (moderatorHeader || legacyBodyToken || legacyQueryToken) {
       activeToken = moderatorHeader || legacyBodyToken || legacyQueryToken;
       const tokenResult = await validateModeratorToken(activeToken);
       if (!tokenResult.valid) {
@@ -378,16 +351,16 @@ export default async function handler(req, res) {
       authType = 'moderator';
       moderatorPermissions = tokenResult.permissions;
     }
-    // 3. Streamer Authentication via verified Supabase JWT in Authorization Bearer
+    // 2. Streamer Authentication via verified Supabase JWT in Authorization Bearer
     else if (authHeader && authHeader.toLowerCase().startsWith('bearer ')) {
       const rawBearer = authHeader.replace(/^Bearer\s+/i, '').trim();
 
-      // Companion and moderator tokens mistakenly supplied as Bearer JWT must NEVER be accepted as streamer JWT
-      if (rawBearer.startsWith('scomp_') || rawBearer.startsWith('rmt_')) {
+      // Remote tokens mistakenly supplied as Bearer JWT must NEVER be accepted as streamer JWT
+      if (rawBearer.startsWith('rmt_') || rawBearer.startsWith('scomp_')) {
         return res.status(401).json({
           success: false,
           ok: false,
-          error: { code: 'INVALID_CREDENTIALS', message: 'Companion and moderator tokens must not be supplied as Bearer JWT.' },
+          error: { code: 'INVALID_CREDENTIALS', message: 'Remote moderator tokens must not be supplied as Bearer JWT.' },
         });
       }
 
@@ -411,34 +384,14 @@ export default async function handler(req, res) {
 
       authorizedStreamerKey = verifiedStreamer.streamerKey;
       authType = 'streamer';
-
-      // ─── 2.5 Desktop Companion Pairing Endpoint (POST /api/pair-companion) ───
-      if (isPairCompanionPath) {
-        const pairRL = await checkRateLimit(`pair:${verifiedStreamer.userId}`, 10, 60);
-        if (!pairRL.allowed) {
-          res.setHeader('Retry-After', pairRL.resetSeconds);
-          return res.status(429).json({
-            success: false,
-            ok: false,
-            error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many companion pairing requests.' },
-          });
-        }
-
-        const companionData = await createCompanionToken(verifiedStreamer.streamerKey, verifiedStreamer.userId);
-        return res.status(200).json({
-          success: true,
-          ok: true,
-          ...companionData,
-        });
-      }
     } else {
-      // STRICT: Neither JWT nor Moderator/Companion Token provided. Streamer key alone is NOT sufficient!
+      // STRICT: Neither JWT nor Moderator Token provided. Streamer key alone is NOT sufficient!
       return res.status(401).json({
         success: false,
         ok: false,
         error: {
           code: 'UNAUTHORIZED',
-          message: 'Authentication required. Provide a valid Bearer token (for streamers) or a Moderator/Companion token.',
+          message: 'Authentication required. Provide a valid Bearer token (for streamers) or a Moderator token.',
         },
       });
     }
@@ -470,8 +423,8 @@ export default async function handler(req, res) {
         });
       }
 
-      // Check Moderator / Companion Permissions for Action
-      if ((authType === 'moderator' || authType === 'companion') && moderatorPermissions) {
+      // Check Moderator Permissions for Action
+      if (authType === 'moderator' && moderatorPermissions) {
         if ((rawAction === 'add' || rawAction === 'addDeath' || rawAction === 'undo' || rawAction === 'undoDeath') &&
             !moderatorPermissions.can_increment_deaths) {
           return res.status(403).json({
@@ -568,7 +521,7 @@ export default async function handler(req, res) {
         });
       }
 
-      if ((authType === 'moderator' || authType === 'companion') && moderatorPermissions) {
+      if (authType === 'moderator' && moderatorPermissions) {
         if (target === 'session' && !moderatorPermissions.can_reset_session) {
           return res.status(403).json({
             success: false,

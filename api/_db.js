@@ -82,15 +82,6 @@ export const DEFAULT_STATE = {
   lastUpdated: 0,
 };
 
-export const COMPANION_PERMISSIONS = Object.freeze({
-  can_increment_deaths: true,
-  can_increment_bosses: true,
-  can_set_deaths: true,
-  can_set_bosses: true,
-  can_reset_session: true,
-  can_reset_all: false,
-});
-
 // Non-authoritative in-memory read cache (Never used for production writes)
 const channelMap = globalThis.__DEATH_COUNTER_CHANNELS__ || (globalThis.__DEATH_COUNTER_CHANNELS__ = new Map());
 
@@ -252,7 +243,7 @@ export async function verifyStreamerAuth(jwtToken) {
 }
 
 /**
- * Validate Remote Moderator or Companion Token via SHA-256 hash lookup in Supabase.
+ * Validate Remote Moderator Token via SHA-256 hash lookup in Supabase.
  * Enforces expiration, revocation, and returns fine-grained permissions.
  */
 export async function validateModeratorToken(rawToken) {
@@ -279,20 +270,6 @@ export async function validateModeratorToken(rawToken) {
             can_reset_session: true,
             can_reset_all: false,
           },
-          expiresAt: null,
-        };
-      }
-      if (clean === 'revoked-companion-token') {
-        return { valid: false, reason: 'revoked', streamerName: 'Test Streamer' };
-      }
-      if (clean.startsWith('scomp_')) {
-        return {
-          valid: true,
-          tokenId: 'test-comp-id',
-          streamerKey: 'streamer-comp-test-key',
-          streamerName: 'Test Streamer',
-          label: 'Desktop Companion',
-          permissions: { ...COMPANION_PERMISSIONS },
           expiresAt: null,
         };
       }
@@ -366,48 +343,6 @@ export async function validateModeratorToken(rawToken) {
     console.warn('[DB] Token validation error:', err.message);
     return { valid: false, reason: 'error' };
   }
-}
-
-/**
- * Issue a dedicated desktop companion token for an authenticated streamer.
- * Hashes token with SHA-256 and persists to streamer_remote_tokens.
- */
-export async function createCompanionToken(streamerKey, userId) {
-  if (!streamerKey || !userId) {
-    const err = new Error('streamerKey and userId required to issue companion token');
-    err.status = 400;
-    throw err;
-  }
-
-  const rawToken = `scomp_${crypto.randomBytes(24).toString('hex')}`;
-  const tokenHash = hashToken(rawToken);
-
-  const sb = getSupabase();
-  if (sb) {
-    const { error } = await sb.from('streamer_remote_tokens').insert({
-      user_id: userId,
-      streamer_key: streamerKey,
-      streamer_name: 'Streamer Companion',
-      label: 'Desktop Companion',
-      token_hash: tokenHash,
-      permissions: { ...COMPANION_PERMISSIONS },
-      expires_at: null,
-      is_revoked: false,
-    });
-
-    if (error) {
-      const err = new Error(`Failed to persist companion token: ${error.message}`);
-      err.status = 500;
-      throw err;
-    }
-  }
-
-  return {
-    token: rawToken,
-    companionToken: rawToken,
-    streamerKey,
-    permissions: { ...COMPANION_PERMISSIONS },
-  };
 }
 
 /**

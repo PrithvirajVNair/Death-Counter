@@ -8,9 +8,7 @@ import {
   getState,
   applyAction,
   updateState,
-  createCompanionToken,
   validateModeratorToken,
-  COMPANION_PERMISSIONS,
 } from '../api/_db.js';
 import { saveCloudConfig, supabase } from '../src/lib/supabase.js';
 
@@ -128,12 +126,12 @@ describe('SDC Integration & Architecture Verification Suite', () => {
     assert.equal(res.body.error.code, 'MISSING_TOKEN');
   });
 
-  // ─── 4. Desktop Companion Pairing & Auth Handshake ───
-  it('POST /api/pair-companion requires authenticated streamer Bearer JWT', async () => {
+  // ─── 4. Authentication & Authorization Enforcement ───
+  it('POST /api/action rejects requests with missing credentials', async () => {
     const { req, res } = createMockReqRes({
       method: 'POST',
-      url: '/api/pair-companion',
-      body: { streamerKey: 'any-key' },
+      url: '/api/action',
+      body: { streamerKey: 'any-key', action: 'add', operationId: 'op_missing_cred_1' },
     });
 
     await handler(req, res);
@@ -141,23 +139,16 @@ describe('SDC Integration & Architecture Verification Suite', () => {
     assert.equal(res.body.error.code, 'UNAUTHORIZED');
   });
 
-  it('Companion pairing issues an scomp_ token with full permissions for the streamer', async () => {
-    const testKey = 'streamer-comp-test-key';
-    const testUserId = 'user-uuid-1234';
+  it('Moderator token validates permissions and rejects revoked tokens', async () => {
+    const validResult = await validateModeratorToken('valid-token');
+    assert.equal(validResult.valid, true);
+    assert.equal(validResult.streamerKey, 'test-streamer');
+    assert.equal(validResult.permissions.can_increment_deaths, true);
+    assert.equal(validResult.permissions.can_reset_all, false);
 
-    const result = await createCompanionToken(testKey, testUserId);
-    assert.ok(result.token, 'Must return token');
-    assert.ok(result.token.startsWith('scomp_'), 'Companion token must have scomp_ prefix');
-    assert.equal(result.streamerKey, testKey);
-    assert.equal(result.permissions.can_increment_deaths, true);
-    assert.equal(result.permissions.can_increment_bosses, true);
-    assert.equal(result.permissions.can_reset_session, true);
-    assert.equal(result.permissions.can_reset_all, false);
-
-    // Verify token can be validated
-    const validation = await validateModeratorToken(result.token);
-    assert.equal(validation.valid, true);
-    assert.equal(validation.streamerKey, testKey);
+    const revokedResult = await validateModeratorToken('revoked-token');
+    assert.equal(revokedResult.valid, false);
+    assert.equal(revokedResult.reason, 'revoked');
   });
 
   // ─── 5. Configuration Update Concurrency & Counter Separation ───
@@ -266,13 +257,13 @@ describe('SDC Integration & Architecture Verification Suite', () => {
       assert.equal(res.body.error.code, 'INVALID_TOKEN');
     });
 
-    // 5. Companion token mutation succeeds using X-Companion-Token only
-    it('5. Companion token mutation succeeds using X-Companion-Token only', async () => {
+    // 5. Moderator token mutation succeeds using X-Moderator-Token
+    it('5. Moderator token mutation succeeds using X-Moderator-Token', async () => {
       const { req, res } = createMockReqRes({
         method: 'POST',
         url: '/api/action',
-        headers: { 'x-companion-token': 'scomp_valid_companion_5' },
-        body: { action: 'add', operationId: 'op_reg_companion_succ_5' },
+        headers: { 'x-moderator-token': 'valid-token' },
+        body: { key: 'test-streamer', action: 'add', operationId: 'op_reg_mod_succ_5' },
       });
       await handler(req, res);
       assert.equal(res.statusCode, 200);
@@ -280,26 +271,26 @@ describe('SDC Integration & Architecture Verification Suite', () => {
       assert.equal(res.body.action, 'add');
     });
 
-    // 6. Companion token mistakenly supplied as Bearer JWT is not accepted as a streamer JWT
-    it('6. Companion token mistakenly supplied as Bearer JWT is not accepted as a streamer JWT', async () => {
+    // 6. Moderator token mistakenly supplied as Bearer JWT is not accepted as a streamer JWT
+    it('6. Moderator token mistakenly supplied as Bearer JWT is not accepted as a streamer JWT', async () => {
       const { req, res } = createMockReqRes({
         method: 'POST',
         url: '/api/action',
-        headers: { authorization: 'Bearer scomp_valid_companion_6' },
-        body: { action: 'add', operationId: 'op_reg_comp_as_bearer_6' },
+        headers: { authorization: 'Bearer rmt_valid_token_6' },
+        body: { action: 'add', operationId: 'op_reg_mod_as_bearer_6' },
       });
       await handler(req, res);
       assert.equal(res.statusCode, 401);
       assert.equal(res.body.error.code, 'INVALID_CREDENTIALS');
     });
 
-    // 7. Revoked companion token is rejected
-    it('7. Revoked companion token is rejected', async () => {
+    // 7. Revoked moderator token is rejected
+    it('7. Revoked moderator token is rejected', async () => {
       const { req, res } = createMockReqRes({
         method: 'POST',
         url: '/api/action',
-        headers: { 'x-companion-token': 'revoked-companion-token' },
-        body: { action: 'add', operationId: 'op_reg_comp_revoked_7' },
+        headers: { 'x-moderator-token': 'revoked-token' },
+        body: { key: 'test-streamer', action: 'add', operationId: 'op_reg_mod_revoked_7' },
       });
       await handler(req, res);
       assert.equal(res.statusCode, 401);
@@ -360,23 +351,13 @@ describe('SDC Integration & Architecture Verification Suite', () => {
       }
     });
 
-    // 9. Companion permissions returned to the client match stored permissions
-    it('9. Companion permissions returned to the client match stored permissions', async () => {
-      const testKey = 'streamer-comp-perm-key';
-      const testUserId = 'user-uuid-perm-123';
-      const companion = await createCompanionToken(testKey, testUserId);
-
-      // Verify returned permissions
-      assert.deepEqual(companion.permissions, COMPANION_PERMISSIONS);
-      assert.equal(companion.permissions.can_reset_all, false, 'can_reset_all must be false');
-      assert.equal(companion.permissions.can_increment_deaths, true);
-      assert.equal(companion.permissions.can_reset_session, true);
-
-      // Verify database-validated permissions match exactly
-      const validated = await validateModeratorToken(companion.token);
+    // 9. Moderator permissions enforced correctly
+    it('9. Moderator permissions enforced correctly', async () => {
+      const validated = await validateModeratorToken('valid-token');
       assert.equal(validated.valid, true);
-      assert.deepEqual(validated.permissions, companion.permissions);
-      assert.equal(validated.permissions.can_reset_all, false);
+      assert.equal(validated.permissions.can_reset_all, false, 'can_reset_all must be false');
+      assert.equal(validated.permissions.can_increment_deaths, true);
+      assert.equal(validated.permissions.can_reset_session, true);
     });
 
     // 10. Redis rate limiting does not extend its expiry on every blocked request

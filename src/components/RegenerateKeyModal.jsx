@@ -120,7 +120,7 @@ export default function RegenerateKeyModal({ isOpen, onClose }) {
               Regenerate Streamer Key
             </h3>
             <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#a89f8c' }}>
-              Create a fresh secret key to connect OBS and your companion app
+              Create a fresh secret key to connect your OBS browser overlay
             </p>
           </div>
         </div>
@@ -148,7 +148,6 @@ export default function RegenerateKeyModal({ isOpen, onClose }) {
                 Regenerating your key will immediately invalidate your previous key.
                 <ul style={{ margin: '6px 0 0', paddingLeft: '18px' }}>
                   <li>Your OBS browser source overlays will need the new URL.</li>
-                  <li>You must paste the new key into the desktop companion app.</li>
                   <li><strong>Your death counts, boss records, and settings remain 100% safe.</strong></li>
                 </ul>
               </div>

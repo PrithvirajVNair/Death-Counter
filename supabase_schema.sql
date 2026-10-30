@@ -37,7 +37,7 @@ create table if not exists public.streamer_states (
 create index if not exists idx_streamer_states_user_id on public.streamer_states(user_id);
 create index if not exists idx_streamer_states_streamer_key on public.streamer_states(streamer_key);
 
--- 2.2 Remote Moderator & Companion Tokens Table (Stores ONLY SHA-256 Hashes)
+-- 2.2 Remote Moderator Tokens Table (Stores ONLY SHA-256 Hashes)
 create table if not exists public.streamer_remote_tokens (
   id uuid primary key default uuid_generate_v4(),
   user_id uuid references auth.users(id) on delete cascade not null,

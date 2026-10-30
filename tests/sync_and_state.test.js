@@ -5,45 +5,6 @@ import assert from 'node:assert/strict';
 import { updateState, getState, applyAction } from '../api/_db.js';
 import { generateRemoteToken, generateCryptoRandomString } from '../src/lib/supabase.js';
 
-// Replica of the C# companion exact origin verification algorithm
-function isAllowedDesktopOrigin(originHeader, trustedServerUrl = 'https://soulgamedc-rosy.vercel.app') {
-  if (!originHeader || typeof originHeader !== 'string') return false;
-  if (originHeader === 'null') return false;
-
-  try {
-    const parsed = new URL(originHeader);
-    const scheme = parsed.protocol.replace(':', '').toLowerCase();
-    const host = parsed.hostname.toLowerCase();
-    const port = parsed.port ? parseInt(parsed.port, 10) : (scheme === 'https' ? 443 : 80);
-
-    // Loopback development origins
-    if (scheme === 'http') {
-      if ((host === 'localhost' || host === '127.0.0.1') && (port === 5173 || port === 3000 || port === 4455 || port === 80)) {
-        return true;
-      }
-    }
-
-    // Production official web application origin
-    if (scheme === 'https') {
-      if (host === 'soulgamedc-rosy.vercel.app' && port === 443) {
-        return true;
-      }
-      if (trustedServerUrl) {
-        try {
-          const sUri = new URL(trustedServerUrl);
-          const sPort = sUri.port ? parseInt(sUri.port, 10) : 443;
-          if (sUri.protocol.replace(':', '').toLowerCase() === scheme && sUri.hostname.toLowerCase() === host && sPort === port) {
-            return true;
-          }
-        } catch {}
-      }
-    }
-
-    return false;
-  } catch {
-    return false;
-  }
-}
 
 describe('State Preservation, Idempotency & Cryptographic Randomness', () => {
   it('generateCryptoRandomString creates high-entropy unique strings', () => {
@@ -113,21 +74,5 @@ describe('State Preservation, Idempotency & Cryptographic Randomness', () => {
     const res2 = await applyAction('add', 0, {}, testChannel, null, opId);
     assert.equal(res2.state.deaths, 1, 'Duplicate operation ID must not re-increment');
     assert.equal(res2.deduped, true, 'Result must be flagged as deduped');
-  });
-
-  it('desktop companion origin validation permits trusted origins and rejects attackers', () => {
-    // Valid origins
-    assert.equal(isAllowedDesktopOrigin('https://soulgamedc-rosy.vercel.app'), true);
-    assert.equal(isAllowedDesktopOrigin('http://localhost:5173'), true);
-    assert.equal(isAllowedDesktopOrigin('http://127.0.0.1:5173'), true);
-
-    // Attacker origins: Must ALL be rejected!
-    assert.equal(isAllowedDesktopOrigin('https://soulgamedc-rosy.vercel.app.attacker.com'), false, 'Prefix attack must be rejected');
-    assert.equal(isAllowedDesktopOrigin('https://evil-hacker.vercel.app'), false, 'Arbitrary vercel subdomain must be rejected');
-    assert.equal(isAllowedDesktopOrigin('null'), false, 'Null origin must be rejected');
-    assert.equal(isAllowedDesktopOrigin(''), false, 'Empty origin must be rejected');
-    assert.equal(isAllowedDesktopOrigin(null), false, 'Missing origin must be rejected');
-    assert.equal(isAllowedDesktopOrigin('http://evil.com'), false, 'External HTTP must be rejected');
-    assert.equal(isAllowedDesktopOrigin('javascript:alert(1)'), false, 'Invalid scheme must be rejected');
   });
 });

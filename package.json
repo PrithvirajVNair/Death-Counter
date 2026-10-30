@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "hotkeys": "powershell -ExecutionPolicy Bypass -File ./scripts/start-hotkeys.ps1",
     "build": "vite build",
     "lint": "oxlint",
     "test": "node --test tests/api_security.test.js tests/counter.test.js tests/sync_and_state.test.js tests/integration.test.js",
     "test:integration": "node --test tests/integration.test.js",
+    "verify:release": "node scripts/verify-release.js",
+    "package": "node scripts/package-release.js",
     "preview": "vite preview"
   },
   "dependencies": {

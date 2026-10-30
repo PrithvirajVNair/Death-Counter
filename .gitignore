@@ -23,7 +23,32 @@ dist-ssr
 *.sln
 *.sw?
 
-# Environment variables
+# Environment variables & secrets (Strictly blocked from Git)
 .env
+.env.*
 .env.local
-.env.*.local
+.env.development
+.env.test
+.env.production
+!.env.example
+
+# Temporary files, logs, and diagnostic traces
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+hotkey.log
+startup_error.log
+constructor_error.log
+unhandled_thread_error.log
+
+# Release packages and archives
+release/
+*.zip
+*.tar.gz
+
+# Executables & Binaries (Completely discontinued)
+*.exe
+*.dll

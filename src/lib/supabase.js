@@ -249,29 +249,6 @@ export async function applyStreamerMutation(action, value = 0, { streamerKey, op
   };
 }
 
-/**
- * Request a dedicated desktop companion token for the authenticated streamer.
- */
-export async function requestCompanionToken(streamerKey) {
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token;
-  if (!token) throw new Error('Authentication required to pair desktop companion.');
-
-  const res = await fetch('/api/pair-companion', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-    },
-    body: JSON.stringify({ streamerKey }),
-  });
-
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(json.error?.message || 'Failed to generate companion pairing token.');
-  }
-  return json;
-}
 
 /**
  * Load user counter state from Supabase by streamerKey.

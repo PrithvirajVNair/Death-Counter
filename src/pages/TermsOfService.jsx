@@ -43,8 +43,8 @@ export default function TermsOfService() {
               1. Acceptance of Terms
             </h2>
             <p>
-              By accessing, browsing, downloading, or using the <strong>Souls Game Death Counter</strong> web overlay,
-              the browser controller, or the companion desktop application, you agree to be bound by these Terms of Service.
+              By accessing, browsing, or using the <strong>Souls Game Death Counter</strong> web overlay
+              or browser controller, you agree to be bound by these Terms of Service.
               If you do not agree to these terms, please discontinue use of this software.
             </p>
           </section>
@@ -68,11 +68,10 @@ export default function TermsOfService() {
           <section className="legal-section">
             <h2 className="legal-section__title">
               <Shield size={18} color="var(--gold)" />
-              3. Companion Desktop Utility & Anti-Cheat Safety
+              3. Web Controller & Anti-Cheat Safety
             </h2>
             <p>
-              The native Windows hotkey utility (<code>DeathCounterHotkeys.exe</code>) is designed to operate safely
-              alongside video games:
+              Souls Game Death Counter is a pure web-based streaming tool designed to operate entirely in your browser:
             </p>
             <ul className="legal-list">
               <li>
@@ -80,12 +79,11 @@ export default function TermsOfService() {
                 game files, or executable processes.
               </li>
               <li>
-                <strong>No Game Automation:</strong> The utility does not generate automated in-game macros, botting scripts, or game inputs.
-                It only captures user keystrokes assigned to update the death counter tally.
+                <strong>No Game Automation:</strong> The software does not generate automated in-game macros, botting scripts, or game inputs.
+                It operates strictly through web browser clicks, web keyboard shortcuts, and remote moderator controls.
               </li>
               <li>
-                <strong>User Responsibility:</strong> While standard global hotkey listeners are universally permitted in single-player and
-                streaming setups, users are responsible for complying with the specific rules and terms of any competitive multiplayer games they play.
+                <strong>Pure Web Application:</strong> No native executables, binaries, background services, or device drivers are distributed or installed.
               </li>
             </ul>
           </section>

@@ -294,6 +294,12 @@ namespace SoulsGameDeathCounter {
         private static string userEmail = "";
         private static bool isUserSignedIn = false;
 
+        public static bool IsAuthenticated {
+            get {
+                return isUserSignedIn && !string.IsNullOrEmpty(streamerKey) && streamerKey != "guest";
+            }
+        }
+
         // UI Controls
         private Button btnToggle;
 
@@ -305,6 +311,7 @@ namespace SoulsGameDeathCounter {
         private Label lblKeyTag;
         private TextBox txtStreamerKey;
         private Button btnConnectKey;
+        private Button btnPasteKey;
 
         // Live Scoreboard Controls (Similar to Site)
         private Label lblDeathNumber;
@@ -362,13 +369,23 @@ namespace SoulsGameDeathCounter {
                 UpdateAccountUI();
 
                 this.Shown += delegate {
-                    TestConnectionAsync();
                     UpdateCountersUI();
                     UpdateAccountUI();
-                    LogActivity(string.Format("App ready. Death: [{0} / {1}] | Boss: [{2} / {3}]",
-                        bindingAdd.DisplayName, bindingUndo.DisplayName, bindingAddBoss.DisplayName, bindingUndoBoss.DisplayName));
-                    if (localDeaths > 0 || localBossKills > 0) {
-                        LogActivity(string.Format("Loaded previous session from PC: {0} Deaths, {1} Boss Slain", localDeaths, localBossKills));
+                    if (!IsAuthenticated) {
+                        LogActivity("==================================================");
+                        LogActivity("⚠ SIGN-IN IS MANDATORY FOR THIS APP");
+                        LogActivity("Offline mode has been disabled. You must sign in");
+                        LogActivity("with your Streamer Account to use hotkeys & OBS.");
+                        LogActivity("Click '✦ Sign in with Google' or paste your Key.");
+                        LogActivity("==================================================");
+                    } else {
+                        TestConnectionAsync();
+                        LogActivity(string.Format("✦ App ready. Signed in as {0}", userDisplayName));
+                        LogActivity(string.Format("Keys: Death [{0} / {1}] | Boss [{2} / {3}]",
+                            bindingAdd.DisplayName, bindingUndo.DisplayName, bindingAddBoss.DisplayName, bindingUndoBoss.DisplayName));
+                        if (localDeaths > 0 || localBossKills > 0) {
+                            LogActivity(string.Format("Loaded account tally: {0} Deaths, {1} Boss Slain", localDeaths, localBossKills));
+                        }
                     }
                 };
             } catch (Exception ex) {
@@ -807,20 +824,20 @@ namespace SoulsGameDeathCounter {
 
             this.Controls.Add(grpHotkeys);
 
-            // ─── Streamer Account Card (Google Sync) ───
+            // ─── Streamer Account Card (Mandatory Sign-In) ───
             grpAccount = new GroupBox();
-            grpAccount.Text = " ✦ Streamer Cloud Account (Google Sync) ";
+            grpAccount.Text = " ✦ Streamer Cloud Account (Sign-In Mandatory) ";
             grpAccount.Location = new Point(20, 476);
             grpAccount.Size = new Size(475, 116);
             grpAccount.ForeColor = Color.FromArgb(200, 166, 93);
             grpAccount.BackColor = Color.FromArgb(24, 25, 20);
 
             lblAccountStatus = new Label();
-            lblAccountStatus.Text = "○ Offline Mode: Sign in to sync your cloud counter & OBS";
+            lblAccountStatus.Text = "⚠ Sign-In Required: Sign in to activate hotkeys & OBS sync";
             lblAccountStatus.Location = new Point(16, 22);
             lblAccountStatus.Size = new Size(445, 20);
             lblAccountStatus.Font = new Font("Segoe UI", 8F, FontStyle.Bold);
-            lblAccountStatus.ForeColor = Color.FromArgb(200, 166, 93);
+            lblAccountStatus.ForeColor = Color.FromArgb(248, 113, 113);
             grpAccount.Controls.Add(lblAccountStatus);
 
             btnGoogleSignIn = new Button();
@@ -838,9 +855,9 @@ namespace SoulsGameDeathCounter {
             grpAccount.Controls.Add(btnGoogleSignIn);
 
             btnSignOut = new Button();
-            btnSignOut.Text = "Unlink";
+            btnSignOut.Text = "Sign Out";
             btnSignOut.Location = new Point(182, 46);
-            btnSignOut.Size = new Size(64, 28);
+            btnSignOut.Size = new Size(74, 28);
             btnSignOut.FlatStyle = FlatStyle.Flat;
             btnSignOut.FlatAppearance.BorderSize = 1;
             btnSignOut.FlatAppearance.BorderColor = Color.FromArgb(70, 30, 30);
@@ -862,17 +879,38 @@ namespace SoulsGameDeathCounter {
 
             txtStreamerKey = new TextBox();
             txtStreamerKey.Location = new Point(102, 80);
-            txtStreamerKey.Size = new Size(270, 24);
+            txtStreamerKey.Size = new Size(210, 24);
             txtStreamerKey.BackColor = Color.FromArgb(14, 15, 12);
             txtStreamerKey.ForeColor = Color.FromArgb(200, 166, 93);
             txtStreamerKey.BorderStyle = BorderStyle.FixedSingle;
             txtStreamerKey.Font = new Font("Consolas", 8.5F);
             grpAccount.Controls.Add(txtStreamerKey);
 
+            btnPasteKey = new Button();
+            btnPasteKey.Text = "Paste";
+            btnPasteKey.Location = new Point(318, 79);
+            btnPasteKey.Size = new Size(62, 26);
+            btnPasteKey.FlatStyle = FlatStyle.Flat;
+            btnPasteKey.FlatAppearance.BorderSize = 1;
+            btnPasteKey.FlatAppearance.BorderColor = Color.FromArgb(74, 63, 38);
+            btnPasteKey.BackColor = Color.FromArgb(28, 29, 23);
+            btnPasteKey.ForeColor = Color.FromArgb(200, 166, 93);
+            btnPasteKey.Cursor = Cursors.Hand;
+            btnPasteKey.Click += delegate {
+                try {
+                    string clip = Clipboard.GetText();
+                    if (!string.IsNullOrEmpty(clip)) {
+                        txtStreamerKey.Text = clip.Trim();
+                        BtnConnectKey_Click(btnConnectKey, EventArgs.Empty);
+                    }
+                } catch {}
+            };
+            grpAccount.Controls.Add(btnPasteKey);
+
             btnConnectKey = new Button();
             btnConnectKey.Text = "Connect";
-            btnConnectKey.Location = new Point(378, 79);
-            btnConnectKey.Size = new Size(82, 26);
+            btnConnectKey.Location = new Point(386, 79);
+            btnConnectKey.Size = new Size(74, 26);
             btnConnectKey.FlatStyle = FlatStyle.Flat;
             btnConnectKey.FlatAppearance.BorderSize = 1;
             btnConnectKey.FlatAppearance.BorderColor = Color.FromArgb(74, 63, 38);
@@ -1264,10 +1302,10 @@ namespace SoulsGameDeathCounter {
                 string baseEndpoint = serverUrl.TrimEnd('/');
                 string target = baseEndpoint + "/controller";
                 Process.Start(target);
-                LogActivity("✦ Opening browser for Google Sign-In: " + target);
-                LogActivity("✦ Once you sign in with Google on the site, this app will link automatically!");
+                LogActivity("✦ Opening browser for Streamer Sign-In: " + target);
+                LogActivity("✦ Sign in on the page, then copy your Streamer Key here or click Paste!");
             } catch (Exception ex) {
-                MessageBox.Show("Could not open browser: " + ex.Message, "Sign In with Google", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("Could not open browser: " + ex.Message, "Sign In Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
 
@@ -1276,9 +1314,18 @@ namespace SoulsGameDeathCounter {
             userDisplayName = "";
             userEmail = "";
             isUserSignedIn = false;
+            lock (stateLock) {
+                localDeaths = 0;
+                localSessionDeaths = 0;
+                localAllTimeDeaths = 0;
+                localBossKills = 0;
+                localLastUpdated = 0;
+                SaveLocalState();
+            }
             SaveConfig();
             UpdateAccountUI();
-            LogActivity("Account unlinked. App is now running in local offline mode.");
+            UpdateCountersUI();
+            LogActivity("Signed out. App is locked: Sign in is mandatory to use hotkeys.");
         }
 
         private void BtnConnectKey_Click(object sender, EventArgs e) {
@@ -1290,33 +1337,34 @@ namespace SoulsGameDeathCounter {
             }
 
             streamerKey = key;
-            if (string.IsNullOrEmpty(userDisplayName)) {
+            if (string.IsNullOrEmpty(userDisplayName) || userDisplayName == "guest") {
                 userDisplayName = key;
             }
             isUserSignedIn = true;
             SaveConfig();
             UpdateAccountUI();
-            LogActivity("✦ Linked Streamer Key: " + streamerKey + ". Personal cloud sync active!");
+            LogActivity("✦ Linked Streamer Key: " + streamerKey + ". Fetching cloud state...");
             TestConnectionAsync();
         }
 
         private void UpdateAccountUI() {
             SafeInvoke(delegate {
                 if (lblAccountStatus != null && !lblAccountStatus.IsDisposed) {
-                    if (isUserSignedIn && !string.IsNullOrEmpty(streamerKey) && streamerKey != "guest") {
+                    if (IsAuthenticated) {
                         string name = !string.IsNullOrEmpty(userDisplayName) ? userDisplayName : streamerKey;
-                        lblAccountStatus.Text = "● Signed In: " + name + " (Google Cloud Active)";
+                        lblAccountStatus.Text = "● Signed In: " + name + " (Cloud Active • Hotkeys Enabled)";
                         lblAccountStatus.ForeColor = Color.FromArgb(74, 222, 128);
                         if (btnSignOut != null) {
                             btnSignOut.Visible = true;
                             btnSignOut.Enabled = true;
+                            btnSignOut.Text = "Sign Out";
                         }
                         if (btnGoogleSignIn != null) {
-                            btnGoogleSignIn.Text = "Re-link Google";
+                            btnGoogleSignIn.Text = "Switch Account";
                         }
                     } else {
-                        lblAccountStatus.Text = "○ Offline Mode: Sign in to sync your cloud counter & OBS";
-                        lblAccountStatus.ForeColor = Color.FromArgb(200, 166, 93);
+                        lblAccountStatus.Text = "⚠ Sign-In Required: Sign in with Google or enter Streamer Key";
+                        lblAccountStatus.ForeColor = Color.FromArgb(248, 113, 113);
                         if (btnSignOut != null) {
                             btnSignOut.Visible = false;
                             btnSignOut.Enabled = false;
@@ -1329,10 +1377,16 @@ namespace SoulsGameDeathCounter {
                 if (txtStreamerKey != null && !txtStreamerKey.IsDisposed && !txtStreamerKey.Focused) {
                     txtStreamerKey.Text = streamerKey ?? "";
                 }
+                UpdateUIState();
             });
         }
 
         private void BtnToggle_Click(object sender, EventArgs e) {
+            if (!IsAuthenticated) {
+                LogActivity("⚠ Sign-in is mandatory: Please sign in with Google or enter your Streamer Key.");
+                BtnGoogleSignIn_Click(sender, e);
+                return;
+            }
             isHotkeysActive = !isHotkeysActive;
             UpdateUIState();
             SaveConfig();
@@ -1340,7 +1394,12 @@ namespace SoulsGameDeathCounter {
         }
 
         private void UpdateUIState() {
-            if (isHotkeysActive) {
+            if (!IsAuthenticated) {
+                btnToggle.Text = "🔒  SIGN IN REQUIRED  (Click to Sign In with Google)";
+                btnToggle.BackColor = Color.FromArgb(42, 34, 16);
+                btnToggle.ForeColor = Color.FromArgb(250, 204, 21);
+                btnToggle.FlatAppearance.BorderColor = Color.FromArgb(200, 166, 93);
+            } else if (isHotkeysActive) {
                 btnToggle.Text = "●  HOTKEYS ACTIVE  (Click to Pause)";
                 btnToggle.BackColor = Color.FromArgb(20, 48, 26);
                 btnToggle.ForeColor = Color.FromArgb(74, 222, 128);
@@ -1351,6 +1410,17 @@ namespace SoulsGameDeathCounter {
                 btnToggle.ForeColor = Color.FromArgb(248, 113, 113);
                 btnToggle.FlatAppearance.BorderColor = Color.FromArgb(239, 68, 68);
             }
+
+            // Enable or disable manual counter controls based on authentication
+            bool auth = IsAuthenticated;
+            if (btnManualAddDeath != null) btnManualAddDeath.Enabled = auth;
+            if (btnManualUndoDeath != null) btnManualUndoDeath.Enabled = auth;
+            if (btnManualSetDeath != null) btnManualSetDeath.Enabled = auth;
+            if (btnManualResetDeath != null) btnManualResetDeath.Enabled = auth;
+            if (btnManualAddBoss != null) btnManualAddBoss.Enabled = auth;
+            if (btnManualUndoBoss != null) btnManualUndoBoss.Enabled = auth;
+            if (btnManualSetBoss != null) btnManualSetBoss.Enabled = auth;
+            if (btnManualResetBoss != null) btnManualResetBoss.Enabled = auth;
         }
 
         private static string GetCloudEndpoint(string path) {
@@ -1364,9 +1434,18 @@ namespace SoulsGameDeathCounter {
         }
 
         private void TestConnectionAsync() {
+            if (!IsAuthenticated) {
+                SafeInvoke(delegate {
+                    if (lblServerPing != null && !lblServerPing.IsDisposed) {
+                        lblServerPing.Text = "Sign in required to sync with OBS & Cloud";
+                        lblServerPing.ForeColor = Color.FromArgb(248, 113, 113);
+                    }
+                });
+                return;
+            }
+
             if (lblServerPing != null) {
-                string cloudLabel = !string.IsNullOrEmpty(streamerKey) ? " [Account: " + streamerKey + "]" : " [Offline Mode]";
-                lblServerPing.Text = "Connecting to " + serverUrl + cloudLabel + "...";
+                lblServerPing.Text = "Syncing with cloud [Account: " + streamerKey + "]...";
                 lblServerPing.ForeColor = Color.FromArgb(200, 166, 93);
             }
 
@@ -1381,39 +1460,34 @@ namespace SoulsGameDeathCounter {
                         string json = client.DownloadString(endpoint);
                         Match mDeaths = Regex.Match(json, @"""deaths""\s*:\s*(\d+)");
                         Match mBoss = Regex.Match(json, @"""bossKills""\s*:\s*(\d+)");
+                        Match mSession = Regex.Match(json, @"""sessionDeaths""\s*:\s*(\d+)");
+                        Match mAllTime = Regex.Match(json, @"""allTimeDeaths""\s*:\s*(\d+)");
                         Match mTime = Regex.Match(json, @"""lastUpdated""\s*:\s*(\d+)");
 
                         int srvDeaths = mDeaths.Success ? int.Parse(mDeaths.Groups[1].Value) : 0;
                         int srvBoss = mBoss.Success ? int.Parse(mBoss.Groups[1].Value) : 0;
+                        int srvSession = mSession.Success ? int.Parse(mSession.Groups[1].Value) : 0;
+                        int srvAllTime = mAllTime.Success ? int.Parse(mAllTime.Groups[1].Value) : 0;
                         long srvTime = mTime.Success ? long.Parse(mTime.Groups[1].Value) : 0;
 
                         lock (stateLock) {
-                            // If server is cold at 0 or local is newer, reseed server immediately!
-                            if ((localLastUpdated > srvTime) || (srvDeaths == 0 && srvBoss == 0 && (localDeaths > 0 || localBossKills > 0))) {
-                                string syncEndpoint = GetCloudEndpoint("/api/state");
-                                string payload = string.Format(
-                                    "{{\"type\":\"stateUpdate\",\"deaths\":{0},\"sessionDeaths\":{1},\"allTimeDeaths\":{2},\"bossKills\":{3},\"lastUpdated\":{4},\"key\":\"{5}\"}}",
-                                    localDeaths, localSessionDeaths, localAllTimeDeaths, localBossKills, localLastUpdated > 0 ? localLastUpdated : GetCurrentTimestampMs(), streamerKey ?? ""
-                                );
-                                client.UploadString(syncEndpoint, "POST", payload);
-                                srvDeaths = localDeaths;
-                                srvBoss = localBossKills;
-                            } else if (srvTime > localLastUpdated) {
-                                localDeaths = srvDeaths;
-                                localBossKills = srvBoss;
-                                localLastUpdated = srvTime;
-                                SaveLocalState();
-                            }
+                            localDeaths = srvDeaths;
+                            localBossKills = srvBoss;
+                            localSessionDeaths = srvSession;
+                            localAllTimeDeaths = srvAllTime;
+                            localLastUpdated = srvTime > 0 ? srvTime : GetCurrentTimestampMs();
+                            SaveLocalState();
                         }
 
                         SafeInvoke(delegate {
                             UpdateStatusDisplay(srvDeaths, srvBoss);
+                            LogActivity(string.Format("✦ Cloud synced: {0} Deaths, {1} Boss Kills", srvDeaths, srvBoss));
                         });
                     }
                 } catch (Exception ex) {
                     SafeInvoke(delegate {
                         if (lblServerPing != null && !lblServerPing.IsDisposed) {
-                            lblServerPing.Text = "Local active (Death: " + localDeaths + "). Server notice: " + ex.Message;
+                            lblServerPing.Text = "Connection notice: " + ex.Message;
                             lblServerPing.ForeColor = Color.FromArgb(248, 113, 113);
                         }
                     });
@@ -1557,6 +1631,14 @@ namespace SoulsGameDeathCounter {
                     if (binding.MatchesModifiers()) {
                         if (!isKeyDown) {
                             isKeyDown = true;
+                            if (!IsAuthenticated) {
+                                if (instance != null) {
+                                    instance.SafeInvoke(delegate {
+                                        instance.LogActivity("⚠ Hotkeys locked: Sign-in is mandatory. Please sign in to record deaths.");
+                                    });
+                                }
+                                return;
+                            }
                             TriggerAction(action);
                         }
                     }
@@ -1576,7 +1658,7 @@ namespace SoulsGameDeathCounter {
             while (true) {
                 Thread.Sleep(20);
 
-                if (!isHotkeysActive || recordingTarget != null) continue;
+                if (!isHotkeysActive || !IsAuthenticated || recordingTarget != null) continue;
 
                 CheckPollingBinding(bindingAdd, ref isAddKeyDown, "add");
                 CheckPollingBinding(bindingUndo, ref isUndoKeyDown, "undo");
@@ -1595,6 +1677,9 @@ namespace SoulsGameDeathCounter {
             if (baseDown && binding.MatchesModifiers()) {
                 if (!isKeyDown) {
                     isKeyDown = true;
+                    if (!IsAuthenticated) {
+                        return;
+                    }
                     TriggerAction(action);
                 }
             } else {
@@ -1625,6 +1710,17 @@ namespace SoulsGameDeathCounter {
 
         private static void LoadLocalState() {
             try {
+                if (!IsAuthenticated) {
+                    lock (stateLock) {
+                        localDeaths = 0;
+                        localSessionDeaths = 0;
+                        localAllTimeDeaths = 0;
+                        localBossKills = 0;
+                        localLastUpdated = 0;
+                    }
+                    return;
+                }
+
                 string path = GetLocalStateFilePath();
                 string fallbackPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "death-state.json");
                 string usePath = File.Exists(path) ? path : (File.Exists(fallbackPath) ? fallbackPath : null);
@@ -1648,6 +1744,7 @@ namespace SoulsGameDeathCounter {
 
         private static void SaveLocalState() {
             try {
+                if (!IsAuthenticated) return;
                 string path = GetLocalStateFilePath();
                 string json = string.Format(
                     "{{\n  \"deaths\": {0},\n  \"sessionDeaths\": {1},\n  \"allTimeDeaths\": {2},\n  \"bossKills\": {3},\n  \"lastUpdated\": {4}\n}}",
@@ -1659,8 +1756,13 @@ namespace SoulsGameDeathCounter {
 
         private void UpdateStatusDisplay(int deaths, int bossKills) {
             if (lblServerPing != null && !lblServerPing.IsDisposed) {
-                lblServerPing.Text = string.Format("Live OBS & Saved on PC! Death: {0} | Boss: {1}", deaths, bossKills);
-                lblServerPing.ForeColor = Color.FromArgb(74, 222, 128);
+                if (IsAuthenticated) {
+                    lblServerPing.Text = string.Format("Live OBS & Cloud Synced! Death: {0} | Boss: {1}", deaths, bossKills);
+                    lblServerPing.ForeColor = Color.FromArgb(74, 222, 128);
+                } else {
+                    lblServerPing.Text = "Sign in required to activate counter";
+                    lblServerPing.ForeColor = Color.FromArgb(248, 113, 113);
+                }
             }
             UpdateCountersUI();
         }
@@ -1683,6 +1785,11 @@ namespace SoulsGameDeathCounter {
         }
 
         private void PromptSetCount(string target) {
+            if (!IsAuthenticated) {
+                LogActivity("⚠ Sign in required: Sign in with your Streamer Account to set counts.");
+                BtnGoogleSignIn_Click(this, EventArgs.Empty);
+                return;
+            }
             bool isDeath = target == "death";
             string title = isDeath ? "Set Death Count" : "Set Boss Slain Count";
             int currentVal = isDeath ? localDeaths : localBossKills;
@@ -1781,6 +1888,10 @@ namespace SoulsGameDeathCounter {
         }
 
         private void BtnManualResetDeath_Click(object sender, EventArgs e) {
+            if (!IsAuthenticated) {
+                LogActivity("⚠ Sign in required: Sign in with your Streamer Account to reset deaths.");
+                return;
+            }
             if (confirmResetDeath) {
                 confirmResetDeath = false;
                 btnManualResetDeath.Text = "Reset";
@@ -1837,6 +1948,10 @@ namespace SoulsGameDeathCounter {
         }
 
         private void BtnManualResetBoss_Click(object sender, EventArgs e) {
+            if (!IsAuthenticated) {
+                LogActivity("⚠ Sign in required: Sign in with your Streamer Account to reset boss kills.");
+                return;
+            }
             if (confirmResetBoss) {
                 confirmResetBoss = false;
                 btnManualResetBoss.Text = "Reset";
@@ -1951,6 +2066,7 @@ namespace SoulsGameDeathCounter {
                 res.Headers["Access-Control-Allow-Origin"] = "*";
                 res.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
                 res.Headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With";
+                res.Headers["Access-Control-Allow-Private-Network"] = "true";
                 res.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
                 res.Headers["Pragma"] = "no-cache";
 
@@ -1986,7 +2102,7 @@ namespace SoulsGameDeathCounter {
                         email = req.QueryString["email"] ?? "";
                     }
 
-                    if (!string.IsNullOrEmpty(key)) {
+                    if (!string.IsNullOrEmpty(key) && key != "guest") {
                         streamerKey = key;
                         userDisplayName = !string.IsNullOrEmpty(name) ? name : (!string.IsNullOrEmpty(email) ? email : key);
                         userEmail = email ?? "";
@@ -1996,11 +2112,12 @@ namespace SoulsGameDeathCounter {
                             instance.SafeInvoke(delegate {
                                 instance.UpdateAccountUI();
                                 instance.LogActivity(string.Format("✦ Google Account Linked: {0} ({1}) [Key: {2}]", userDisplayName, userEmail, streamerKey));
+                                instance.TestConnectionAsync();
                             });
                         }
 
                         string json = string.Format(
-                            "{{\"success\":true,\"streamerKey\":\"{0}\",\"displayName\":\"{1}\",\"message\":\"Linked to Desktop App successfully\"}}",
+                            "{{\"success\":true,\"authenticated\":true,\"streamerKey\":\"{0}\",\"displayName\":\"{1}\",\"message\":\"Linked to Desktop App successfully\"}}",
                             streamerKey, userDisplayName
                         );
                         byte[] buffer = System.Text.Encoding.UTF8.GetBytes(json);
@@ -2015,11 +2132,15 @@ namespace SoulsGameDeathCounter {
 
                 if (req.HttpMethod == "GET" && (path == "/api/state" || path == "/" || path == "/state")) {
                     string json;
-                    lock (stateLock) {
-                        json = string.Format(
-                            "{{\"deaths\":{0},\"sessionDeaths\":{1},\"allTimeDeaths\":{2},\"bossKills\":{3},\"lastUpdated\":{4},\"isLocal\":true,\"streamerKey\":\"{5}\",\"userDisplayName\":\"{6}\"}}",
-                            localDeaths, localSessionDeaths, localAllTimeDeaths, localBossKills, localLastUpdated, streamerKey ?? "", userDisplayName ?? ""
-                        );
+                    if (!IsAuthenticated) {
+                        json = "{\"authenticated\":false,\"error\":\"Sign in required\",\"deaths\":0,\"sessionDeaths\":0,\"allTimeDeaths\":0,\"bossKills\":0,\"lastUpdated\":0,\"isLocal\":true}";
+                    } else {
+                        lock (stateLock) {
+                            json = string.Format(
+                                "{{\"authenticated\":true,\"deaths\":{0},\"sessionDeaths\":{1},\"allTimeDeaths\":{2},\"bossKills\":{3},\"lastUpdated\":{4},\"isLocal\":true,\"streamerKey\":\"{5}\",\"userDisplayName\":\"{6}\"}}",
+                                localDeaths, localSessionDeaths, localAllTimeDeaths, localBossKills, localLastUpdated, streamerKey ?? "", userDisplayName ?? ""
+                            );
+                        }
                     }
                     byte[] buffer = System.Text.Encoding.UTF8.GetBytes(json);
                     res.ContentType = "application/json";
@@ -2053,6 +2174,17 @@ namespace SoulsGameDeathCounter {
                                 instance.SafeInvoke(delegate { instance.UpdateAccountUI(); });
                             }
                         }
+                    }
+
+                    if (!IsAuthenticated) {
+                        string errJson = "{\"success\":false,\"authenticated\":false,\"error\":\"Authentication required. Sign in is mandatory.\"}";
+                        byte[] errBuf = System.Text.Encoding.UTF8.GetBytes(errJson);
+                        res.ContentType = "application/json";
+                        res.ContentLength64 = errBuf.Length;
+                        res.StatusCode = 401;
+                        res.OutputStream.Write(errBuf, 0, errBuf.Length);
+                        res.OutputStream.Close();
+                        return;
                     }
 
                     string action = mAct.Success ? mAct.Groups[1].Value : "";
@@ -2163,7 +2295,7 @@ namespace SoulsGameDeathCounter {
                     long srvTime = mTime.Success ? long.Parse(mTime.Groups[1].Value) : 0;
 
                     lock (stateLock) {
-                        if ((localLastUpdated > srvTime) || (srvDeaths == 0 && srvBoss == 0 && (localDeaths > 0 || localBossKills > 0))) {
+                        if (localLastUpdated > srvTime) {
                             string syncEndpoint = GetCloudEndpoint("/api/state");
                             string payload = string.Format(
                                 "{{\"type\":\"stateUpdate\",\"deaths\":{0},\"sessionDeaths\":{1},\"allTimeDeaths\":{2},\"bossKills\":{3},\"lastUpdated\":{4},\"key\":\"{5}\"}}",
@@ -2193,6 +2325,15 @@ namespace SoulsGameDeathCounter {
         }
 
         private static void TriggerAction(string action) {
+            if (!IsAuthenticated) {
+                if (instance != null) {
+                    instance.SafeInvoke(delegate {
+                        instance.LogActivity("⚠ Action blocked: Sign-in is mandatory to use the Death Counter.");
+                    });
+                }
+                return;
+            }
+
             long now = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
             lock (actionLock) {
                 if (now - lastActionTime < 350) return;

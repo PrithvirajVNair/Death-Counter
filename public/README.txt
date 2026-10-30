@@ -5,7 +5,7 @@
 
 QUICK START:
 1. Double-click "RunHotkeys.bat" (or "DeathCounterHotkeys.exe").
-2. The companion app will start and minimize to your system tray.
+2. Sign in with Google or connect your Streamer Key (sign-in is mandatory).
 3. Switch into your Souls game and play!
 
 DEFAULT IN-GAME SHORTCUTS:

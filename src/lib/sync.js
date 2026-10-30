@@ -135,7 +135,7 @@ export function broadcastUpdate(type, payload) {
  * Fetch authoritative state directly from local desktop app or private channel
  */
 export async function fetchServerState() {
-  // 1. Direct local connection (0ms latency, 100% offline & private to this PC)
+  // 1. Direct local companion app connection (0ms latency, private to this PC)
   const isLocal = await checkLocalApp();
   if (isLocal) {
     try {
@@ -143,7 +143,10 @@ export async function fetchServerState() {
         cache: 'no-store',
       });
       if (res.ok) {
-        return await res.json();
+        const data = await res.json();
+        if (data && data.authenticated !== false) {
+          return data;
+        }
       }
     } catch {}
   }

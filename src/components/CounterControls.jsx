@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Skull, Undo2, RotateCcw, Swords, Copy, ExternalLink, Edit3, Check, X } from 'lucide-react';
+import { Skull, Undo2, RotateCcw, Swords, Edit3, Check, X } from 'lucide-react';
 import { showToast } from './Toast';
 
 export default function CounterControls({
@@ -16,9 +16,6 @@ export default function CounterControls({
   onResetBossKills,
   onSetBossKillCount,
   sessionCountVisible,
-  preset = 'classic-rune',
-  goldColor,
-  streamerKey,
 }) {
   const [showConfirmDeath, setShowConfirmDeath] = useState(false);
   const [showConfirmBoss, setShowConfirmBoss] = useState(false);
@@ -28,28 +25,6 @@ export default function CounterControls({
 
   const [isEditingBoss, setIsEditingBoss] = useState(false);
   const [bossInput, setBossInput] = useState('');
-
-  const origin = typeof window !== 'undefined' && window.location.origin && !window.location.origin.includes('undefined')
-    ? window.location.origin
-    : 'https://soulgamedc-rosy.vercel.app';
-  const colorParam = goldColor ? `&goldColor=${encodeURIComponent(goldColor)}` : '';
-  const keyParam = streamerKey ? `&key=${encodeURIComponent(streamerKey)}` : '';
-  const bossOverlayUrl = `${origin}/overlay?preset=${preset}&mode=boss-slain${colorParam}${keyParam}`;
-  const deathOverlayUrl = `${origin}/overlay?preset=${preset}${colorParam}${keyParam}`;
-
-  const handleCopyBossUrl = () => {
-    navigator.clipboard.writeText(bossOverlayUrl).then(
-      () => showToast('Boss Slain OBS Overlay URL copied! Paste into OBS Browser Source'),
-      () => showToast('Failed to copy URL', 'error')
-    );
-  };
-
-  const handleCopyDeathUrl = () => {
-    navigator.clipboard.writeText(deathOverlayUrl).then(
-      () => showToast('Death OBS Overlay URL copied! Paste into OBS Browser Source'),
-      () => showToast('Failed to copy URL', 'error')
-    );
-  };
 
   const handleResetDeath = () => {
     if (showConfirmDeath) {
@@ -179,26 +154,6 @@ export default function CounterControls({
             <span>{showConfirmDeath ? 'Confirm?' : 'Reset'}</span>
           </button>
         </div>
-
-        <div className="counter-controls__quick-obs">
-          <button
-            type="button"
-            className="btn btn--xs btn--secondary"
-            onClick={handleCopyDeathUrl}
-            title="Copy Death OBS Browser Source URL"
-          >
-            <Copy size={12} />
-            <span>Copy Death OBS URL</span>
-          </button>
-          <button
-            type="button"
-            className="btn btn--xs btn--icon"
-            onClick={() => window.open(deathOverlayUrl, '_blank')}
-            title="Preview Death overlay in new tab"
-          >
-            <ExternalLink size={12} />
-          </button>
-        </div>
       </div>
 
       {/* ─── Boss Slain / Kill Counter ─── */}
@@ -270,26 +225,6 @@ export default function CounterControls({
           >
             <RotateCcw size={16} />
             <span>{showConfirmBoss ? 'Confirm?' : 'Reset'}</span>
-          </button>
-        </div>
-
-        <div className="counter-controls__quick-obs">
-          <button
-            type="button"
-            className="btn btn--xs btn--gold"
-            onClick={handleCopyBossUrl}
-            title="Copy Boss Slain OBS Browser Source URL"
-          >
-            <Copy size={12} />
-            <span>Copy Boss Slain OBS URL</span>
-          </button>
-          <button
-            type="button"
-            className="btn btn--xs btn--icon"
-            onClick={() => window.open(bossOverlayUrl, '_blank')}
-            title="Preview Boss Slain overlay in new tab"
-          >
-            <ExternalLink size={12} />
           </button>
         </div>
       </div>

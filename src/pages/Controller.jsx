@@ -318,9 +318,6 @@ export default function Controller() {
             onSetDeathCount={setDeathCount}
             onSetBossKillCount={setBossKillCount}
             sessionCountVisible={settings.sessionCountVisible}
-            preset={settings.preset}
-            goldColor={settings.goldColor}
-            streamerKey={streamerKey}
           />
 
           <OverlayPreview

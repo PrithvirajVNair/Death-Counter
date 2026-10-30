@@ -91,7 +91,7 @@ export default function CustomizationPanel({
               <ol>
                 <li>In OBS Studio, click <strong>+</strong> under <strong>Sources</strong> → select <strong>Browser</strong>.</li>
                 <li>Name it <em>"Souls Game Death Counter"</em> (or <em>"Boss Counter"</em>) and click <strong>OK</strong>.</li>
-                <li>Copy your overlay URL by clicking <strong>Copy Death OBS URL</strong> or <strong>Copy Boss Slain OBS URL</strong> on the counter cards or Live Preview.</li>
+                <li>Copy your overlay URL by clicking <strong>Copy OBS URL</strong> under <strong>Live Preview</strong>.</li>
                 <li>Paste the copied URL into the <strong>URL</strong> field in OBS.</li>
                 <li>Set <strong>Width</strong> to <strong>800</strong> and <strong>Height</strong> to <strong>250</strong> (or adjust to fit your scene layout).</li>
                 <li>Leave <strong>Custom CSS</strong> as default (background is 100% transparent by default).</li>

@@ -85,6 +85,7 @@ alter table public.streamer_remote_tokens enable row level security;
 
 -- Policies:
 -- Streamers can manage their own remote links
+drop policy if exists "Streamers can manage own remote tokens" on public.streamer_remote_tokens;
 create policy "Streamers can manage own remote tokens"
   on public.streamer_remote_tokens
   for all
@@ -92,6 +93,7 @@ create policy "Streamers can manage own remote tokens"
   with check (auth.uid() = user_id);
 
 -- Anyone can validate non-revoked, non-expired tokens
+drop policy if exists "Public token lookup" on public.streamer_remote_tokens;
 create policy "Public token lookup"
   on public.streamer_remote_tokens
   for select

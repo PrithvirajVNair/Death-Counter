@@ -71,7 +71,7 @@ export default function TermsOfService() {
               3. Companion Desktop Utility & Anti-Cheat Safety
             </h2>
             <p>
-              The native Windows hotkey utility (<code>DeathCounterHotkeys.exe</code> / <code>hotkeys.ahk</code>) is designed to operate safely
+              The native Windows hotkey utility (<code>DeathCounterHotkeys.exe</code>) is designed to operate safely
               alongside video games:
             </p>
             <ul className="legal-list">

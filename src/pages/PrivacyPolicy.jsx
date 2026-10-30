@@ -81,7 +81,7 @@ export default function PrivacyPolicy() {
               3. PC Hotkey Companion App Security
             </h2>
             <p>
-              For players running fullscreen games, an optional companion utility (<code>DeathCounterHotkeys.exe</code> / <code>hotkeys.ahk</code>)
+              For players running fullscreen games, an optional companion utility (<code>DeathCounterHotkeys.exe</code>)
               is provided to intercept global keyboard shortcuts:
             </p>
             <ul className="legal-list">

@@ -30,78 +30,7 @@ export default function Controller() {
     updateSettings, resetAppearance, updateShortcuts,
   } = counter;
 
-  const lastShortcutTimeRef = React.useRef(0);
 
-  // ─── Keyboard shortcuts matcher ───
-  const isShortcutMatch = useCallback((e, shortcutStr) => {
-    if (!shortcutStr) return false;
-    const s = shortcutStr.trim();
-    if (!s || s === 'Not Configured' || s === 'None' || s === 'Disabled' || s === 'Unbound') return false;
-
-    const parts = s.split('+').map((p) => p.trim());
-    const needsCtrl = parts.some((p) => /^ctrl$/i.test(p) || /^control$/i.test(p));
-    const needsAlt = parts.some((p) => /^alt$/i.test(p));
-    const needsShift = parts.some((p) => /^shift$/i.test(p));
-    const needsMeta = parts.some((p) => /^meta$/i.test(p) || /^cmd$/i.test(p) || /^win$/i.test(p));
-    const baseKey = parts.find((p) => !/^(ctrl|control|alt|shift|meta|cmd|win)$/i.test(p));
-
-    if (!baseKey) return false;
-
-    if (Boolean(e.ctrlKey) !== needsCtrl) return false;
-    if (Boolean(e.altKey) !== needsAlt) return false;
-    if (Boolean(e.shiftKey) !== needsShift) return false;
-    if (Boolean(e.metaKey) !== needsMeta) return false;
-
-    const eventKey = (e.key || '').toUpperCase();
-    const eventCode = (e.code || '').toUpperCase();
-    const targetKey = baseKey.toUpperCase();
-
-    if (eventKey === targetKey || eventCode === targetKey) return true;
-    if (eventCode === `KEY${targetKey}`) return true;
-    if (eventCode === `DIGIT${targetKey}`) return true;
-    if (eventCode === `NUMPAD${targetKey}`) return true;
-    if (targetKey === '+' || targetKey === 'NUMPADADD') return eventKey === '+' || eventCode === 'NUMPADADD';
-    if (targetKey === '-' || targetKey === 'NUMPADSUBTRACT') return eventKey === '-' || eventCode === 'NUMPADSUBTRACT';
-    if (targetKey.startsWith('NUMPAD') && eventCode === targetKey) return true;
-
-    return false;
-  }, []);
-
-  // ─── Keyboard shortcuts ───
-  useEffect(() => {
-    if (!shortcuts.enabled) return;
-
-    const handler = (e) => {
-      // Ignore when typing in inputs or on OS key repeat
-      if (e.repeat) return;
-      const tag = e.target.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.contentEditable === 'true') return;
-
-      const now = Date.now();
-      if (now - lastShortcutTimeRef.current < 350) return;
-
-      if (isShortcutMatch(e, shortcuts.addDeath)) {
-        e.preventDefault();
-        lastShortcutTimeRef.current = now;
-        addDeath();
-      } else if (isShortcutMatch(e, shortcuts.undoDeath)) {
-        e.preventDefault();
-        lastShortcutTimeRef.current = now;
-        undoDeath();
-      } else if (isShortcutMatch(e, shortcuts.addBossKill)) {
-        e.preventDefault();
-        lastShortcutTimeRef.current = now;
-        addBossKill();
-      } else if (isShortcutMatch(e, shortcuts.undoBossKill)) {
-        e.preventDefault();
-        lastShortcutTimeRef.current = now;
-        undoBossKill();
-      }
-    };
-
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [shortcuts, isShortcutMatch, addDeath, undoDeath, addBossKill, undoBossKill]);
 
   // ─── Preset & Color Selection ───
   const handlePresetSelect = useCallback((presetId) => {
@@ -395,44 +324,13 @@ export default function Controller() {
         <aside className="controller-sidebar">
           <CustomizationPanel
             settings={settings}
-            shortcuts={shortcuts}
             bossKills={bossKills}
             onUpdateSettings={updateSettings}
             onResetAppearance={resetAppearance}
-            onUpdateShortcuts={updateShortcuts}
             onResetSession={resetSession}
           />
         </aside>
       </div>
-
-      {/* Keyboard hint */}
-      {shortcuts.enabled && (
-        <div className="keyboard-hint">
-          {shortcuts.addDeath && shortcuts.addDeath !== 'Not Configured' && (
-            <>
-              <span className="keyboard-hint__key">{shortcuts.addDeath}</span> +1 Death
-            </>
-          )}
-          {shortcuts.undoDeath && shortcuts.undoDeath !== 'Not Configured' && (
-            <>
-              <span className="keyboard-hint__separator">|</span>
-              <span className="keyboard-hint__key">{shortcuts.undoDeath}</span> Undo
-            </>
-          )}
-          {shortcuts.addBossKill && shortcuts.addBossKill !== 'Not Configured' && (
-            <>
-              <span className="keyboard-hint__separator">|</span>
-              <span className="keyboard-hint__key">{shortcuts.addBossKill}</span> +1 Boss Slain
-            </>
-          )}
-          {shortcuts.undoBossKill && shortcuts.undoBossKill !== 'Not Configured' && (
-            <>
-              <span className="keyboard-hint__separator">|</span>
-              <span className="keyboard-hint__key">{shortcuts.undoBossKill}</span> Undo Boss
-            </>
-          )}
-        </div>
-      )}
 
       <footer style={{
         textAlign: 'center',

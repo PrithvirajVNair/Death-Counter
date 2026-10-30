@@ -213,25 +213,22 @@ export async function loadCloudStateByKey(streamerKey) {
 }
 
 /**
- * Generate a friend remote control access token
- * Encodes streamerKey and expiration so it works both in Supabase and statelessly
+ * Generate an opaque, cryptographically-secure random token for friend remote links.
+ * Does NOT contain the streamer key, keeping the streamer key 100% private.
  */
-export function generateRemoteToken(streamerKey, durationHours = 6) {
+export function generateRemoteToken() {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
   let rand = '';
   if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    const bytes = new Uint8Array(8);
+    const bytes = new Uint8Array(20);
     crypto.getRandomValues(bytes);
     for (let i = 0; i < bytes.length; i++) {
       rand += chars[bytes[i] % chars.length];
     }
   } else {
-    rand = Math.random().toString(36).slice(2, 10);
+    rand = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
   }
-  const expiryMs = durationHours && durationHours > 0
-    ? Date.now() + durationHours * 3600 * 1000
-    : 0;
-  return `mod_${streamerKey}_${expiryMs}_${rand}`;
+  return `rmt_${rand.slice(0, 24)}`;
 }
 
 /**
@@ -241,7 +238,7 @@ export async function createRemoteToken(user, { label = 'Friend Access', duratio
   if (!user) throw new Error('User must be logged in to create remote links');
   const streamerKey = getStreamerKey(user);
   const streamerName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'Streamer';
-  const token = generateRemoteToken(streamerKey, durationHours);
+  const token = generateRemoteToken();
   const expiresAt = durationHours && durationHours > 0
     ? new Date(Date.now() + durationHours * 3600 * 1000).toISOString()
     : null;

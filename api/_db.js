@@ -241,3 +241,24 @@ export function resetState(target = 'session', channel = '') {
   saveToSupabaseAsync(channel, state);
   return state;
 }
+
+export async function getStreamerKeyFromToken(token) {
+  if (!token) return null;
+  const client = getSupabase();
+  if (client) {
+    try {
+      const { data, error } = await client
+        .from('streamer_remote_tokens')
+        .select('streamer_key, is_revoked, expires_at')
+        .eq('token', token)
+        .maybeSingle();
+
+      if (!error && data && !data.is_revoked) {
+        if (!data.expires_at || new Date(data.expires_at).getTime() > Date.now()) {
+          return data.streamer_key;
+        }
+      }
+    } catch {}
+  }
+  return null;
+}

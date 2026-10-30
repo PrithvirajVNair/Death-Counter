@@ -1,4 +1,4 @@
-import { getState, updateState, applyAction, resetState, getSupabase } from './_db.js';
+import { getState, updateState, applyAction, resetState, getSupabase, getStreamerKeyFromToken } from './_db.js';
 
 async function parseBody(req) {
   if (req.body !== undefined && req.body !== null && req.body !== '') {
@@ -47,18 +47,26 @@ export default async function handler(req, res) {
     const queryToken = url.searchParams.get('token') || '';
     let queryChannel = url.searchParams.get('key') || url.searchParams.get('streamerKey') || url.searchParams.get('channel') || url.searchParams.get('room') || '';
 
-    if (!queryChannel && queryToken && queryToken.startsWith('mod_')) {
-      const parts = queryToken.split('_');
-      if (parts.length >= 2) queryChannel = parts[1];
+    if (!queryChannel && queryToken) {
+      if (queryToken.startsWith('rmt_')) {
+        queryChannel = await getStreamerKeyFromToken(queryToken);
+      } else if (queryToken.startsWith('mod_')) {
+        const parts = queryToken.split('_');
+        if (parts.length >= 2) queryChannel = parts[1];
+      }
     }
 
     if (req.method === 'POST') {
       const body = await parseBody(req);
       let channel = queryChannel || body.key || body.streamerKey || body.channel || '';
 
-      if (!channel && body.token && body.token.startsWith('mod_')) {
-        const parts = body.token.split('_');
-        if (parts.length >= 2) channel = parts[1];
+      if (!channel && body.token) {
+        if (body.token.startsWith('rmt_')) {
+          channel = await getStreamerKeyFromToken(body.token);
+        } else if (body.token.startsWith('mod_')) {
+          const parts = body.token.split('_');
+          if (parts.length >= 2) channel = parts[1];
+        }
       }
 
       // ─── 1. Action Handler (by URL path or by presence of body.action) ───

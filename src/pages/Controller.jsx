@@ -10,6 +10,7 @@ import CustomizationPanel from '../components/CustomizationPanel';
 import Embers from '../components/Embers';
 import ToastContainer, { showToast } from '../components/Toast';
 import { DEFAULT_PRESET_COLORS } from '../lib/defaults';
+import { loadCloudStateByKey } from '../lib/supabase';
 import { Key, Copy, Check, LogOut, Radio, Users } from 'lucide-react';
 import '../styles/controller.css';
 import '../styles/auth.css';
@@ -135,9 +136,36 @@ export default function Controller() {
     showToast(`Reset ${currentPreset.replace(/-/g, ' ')} color to default`);
   }, [settings.preset, handleColorChange]);
 
-  // Sync state to Supabase cloud when stats update
+  const hasLoadedCloudRef = React.useRef(false);
+  const prevUserRef = React.useRef(null);
+
+  // When user signs in or switches accounts, load THEIR cloud data from Supabase
   useEffect(() => {
-    if (user && streamerKey) {
+    if (user && streamerKey && prevUserRef.current !== user.id) {
+      prevUserRef.current = user.id;
+      hasLoadedCloudRef.current = false;
+
+      loadCloudStateByKey(streamerKey).then((cloudState) => {
+        if (cloudState) {
+          counter.loadFullState(cloudState);
+        } else {
+          // Brand new user with no previous cloud state: start at 0
+          counter.loadFullState({
+            deaths: 0,
+            sessionDeaths: 0,
+            allTimeDeaths: 0,
+            bossKills: 0,
+            lastUpdated: Date.now(),
+          });
+        }
+        hasLoadedCloudRef.current = true;
+      });
+    }
+  }, [user, streamerKey, counter]);
+
+  // Sync state to Supabase cloud when stats update (ONLY after user's cloud data has been safely loaded)
+  useEffect(() => {
+    if (user && streamerKey && hasLoadedCloudRef.current) {
       saveCloudState({
         deaths,
         sessionDeaths,

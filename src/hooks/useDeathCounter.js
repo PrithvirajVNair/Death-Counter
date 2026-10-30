@@ -93,8 +93,8 @@ export function useDeathCounter() {
       const localLastUpdated = loadFromStorage('lastUpdated', 0);
       const serverLastUpdated = serverState.lastUpdated || 0;
 
-      // If local progress is newer than server (or server is cold at 0 while local has data), seed the server!
-      if (!isOverlay && (localLastUpdated > serverLastUpdated || ((serverState.deaths ?? 0) === 0 && localDeaths > 0))) {
+      // If local progress is newer than server, update server (only if server has established history)
+      if (!isOverlay && localLastUpdated > serverLastUpdated && serverLastUpdated > 0) {
         broadcastUpdate('fullSync', {
           deaths: localDeaths,
           sessionDeaths: localSession,
@@ -596,6 +596,49 @@ export function useDeathCounter() {
     history,
     deathAnim,
     bossSlainAnim,
+    loadFullState: (s) => {
+      if (!s) return;
+      if (s.deaths !== undefined) {
+        setDeaths(s.deaths);
+        saveToStorage('deaths', s.deaths);
+      }
+      if (s.sessionDeaths !== undefined) {
+        setSessionDeaths(s.sessionDeaths);
+        saveToStorage('sessionDeaths', s.sessionDeaths);
+      }
+      if (s.allTimeDeaths !== undefined) {
+        setAllTimeDeaths(s.allTimeDeaths);
+        saveToStorage('allTimeDeaths', s.allTimeDeaths);
+      }
+      if (s.bossKills !== undefined) {
+        setBossKills(s.bossKills);
+        saveToStorage('bossKills', s.bossKills);
+      }
+      if (s.settings) {
+        setSettings((prev) => ({ ...prev, ...s.settings }));
+        saveToStorage('settings', s.settings);
+      }
+      if (s.shortcuts) {
+        setShortcuts((prev) => ({ ...prev, ...s.shortcuts }));
+        saveToStorage('shortcuts', s.shortcuts);
+      }
+      if (s.bosses) {
+        setBosses(s.bosses);
+        saveToStorage('bosses', s.bosses);
+      }
+      if (s.currentBoss !== undefined) {
+        setCurrentBoss(s.currentBoss);
+        saveToStorage('currentBoss', s.currentBoss);
+      }
+      if (s.history) {
+        setHistory(s.history);
+        saveToStorage('history', s.history);
+      }
+      if (s.lastUpdated) {
+        setLastUpdated(s.lastUpdated);
+        saveToStorage('lastUpdated', s.lastUpdated);
+      }
+    },
     addDeath,
     undoDeath,
     resetDeaths,

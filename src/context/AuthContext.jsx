@@ -8,6 +8,7 @@ import {
   signOutUser,
   saveCloudState,
 } from "../lib/supabase";
+import { clearAllStorage } from "../lib/storage";
 
 const AuthContext = createContext(null);
 
@@ -32,6 +33,10 @@ export function AuthProvider({ children }) {
       setUser(session?.user || null);
       setLoading(false);
 
+      if (!session?.user) {
+        clearAllStorage();
+      }
+
       // Auto-connect to local desktop app if running
       if (session?.user) {
         const key = getStreamerKey(session.user);
@@ -54,6 +59,12 @@ export function AuthProvider({ children }) {
 
   const streamerKey = user ? getStreamerKey(user) : "";
 
+  const handleSignOut = async () => {
+    clearAllStorage();
+    await signOutUser();
+    window.location.reload();
+  };
+
   const value = {
     user,
     session,
@@ -62,7 +73,7 @@ export function AuthProvider({ children }) {
     signInWithGoogle,
     signInWithEmail,
     signUpWithEmail,
-    signOut: signOutUser,
+    signOut: handleSignOut,
     saveCloudState: (state) => saveCloudState(user, state),
   };
 

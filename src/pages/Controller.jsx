@@ -19,7 +19,6 @@ export default function Controller() {
   const { user, loading: authLoading, streamerKey, signOut, saveCloudState } = useAuth();
   const [transparentPreview, setTransparentPreview] = useState(false);
   const [copiedKey, setCopiedKey] = useState(false);
-  const [copiedOverlay, setCopiedOverlay] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
 
   const {
@@ -211,26 +210,13 @@ export default function Controller() {
               </div>
               <button
                 type="button"
-                className="btn btn--sm btn--secondary"
-                style={{ fontSize: '11px', padding: '3px 8px' }}
-                onClick={() => {
-                  const overlayUrl = `${window.location.origin}/overlay?key=${encodeURIComponent(streamerKey)}`;
-                  navigator.clipboard.writeText(overlayUrl);
-                  setCopiedOverlay(true);
-                  showToast('Copied Private OBS Overlay URL!');
-                  setTimeout(() => setCopiedOverlay(false), 2000);
-                }}
-              >
-                {copiedOverlay ? '✓ URL Copied' : 'Copy OBS Link'}
-              </button>
-              <button
-                type="button"
-                className="btn btn--sm btn--secondary"
-                style={{ fontSize: '11px', padding: '3px 8px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                id="friend-access-btn"
+                className="btn-friend-access"
                 onClick={() => setShareModalOpen(true)}
                 title="Create a remote link for a friend to update your counter live"
               >
-                <Users size={12} color="#C8A65D" /> Friend Access
+                <Users size={13} color="#C8A65D" />
+                <span>Friend Access</span>
               </button>
               <button
                 type="button"

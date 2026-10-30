@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Copy, Check, Clock, Shield, Trash2, ExternalLink, Link2, AlertCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { createRemoteToken, fetchRemoteTokens, revokeRemoteToken } from '../lib/supabase';
@@ -26,11 +27,13 @@ export default function ShareRemoteModal({ isOpen, onClose }) {
   const [copiedLatest, setCopiedLatest] = useState(false);
 
   const loadTokens = useCallback(async () => {
-    if (!user) return;
+    if (!user?.id) return;
     try {
       const data = await fetchRemoteTokens(user);
-      setTokens(data || []);
-    } catch {}
+      setTokens(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.warn('Failed to load remote tokens:', err);
+    }
   }, [user]);
 
   useEffect(() => {
@@ -73,7 +76,9 @@ export default function ShareRemoteModal({ isOpen, onClose }) {
   const formatExpiry = (expiresAt, isRevoked) => {
     if (isRevoked) return { text: 'Revoked', status: 'revoked' };
     if (!expiresAt) return { text: 'Permanent (No expiry)', status: 'permanent' };
-    const diff = new Date(expiresAt).getTime() - Date.now();
+    const dateObj = new Date(expiresAt);
+    if (isNaN(dateObj.getTime())) return { text: 'Active', status: 'active' };
+    const diff = dateObj.getTime() - Date.now();
     if (diff <= 0) return { text: 'Expired', status: 'expired' };
 
     const hours = Math.floor(diff / (1000 * 60 * 60));
@@ -88,11 +93,45 @@ export default function ShareRemoteModal({ isOpen, onClose }) {
     return { text: `Expires in ${mins}m`, status: 'warning' };
   };
 
-  return (
-    <div className="auth-modal-overlay" onClick={onClose}>
+  const modalNode = (
+    <div
+      className="auth-modal-overlay"
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100vw',
+        height: '100vh',
+        zIndex: 999999,
+        backgroundColor: 'rgba(8, 9, 7, 0.88)',
+        backdropFilter: 'blur(10px)',
+        WebkitBackdropFilter: 'blur(10px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '16px',
+        boxSizing: 'border-box',
+      }}
+    >
       <div
         className="auth-modal-card"
-        style={{ maxWidth: '580px', width: '94%' }}
+        style={{
+          width: '100%',
+          maxWidth: '580px',
+          maxHeight: '90vh',
+          overflowY: 'auto',
+          backgroundColor: '#141511',
+          border: '1px solid rgba(200, 166, 93, 0.4)',
+          boxShadow: '0 20px 50px rgba(0, 0, 0, 0.9), 0 0 35px rgba(200, 166, 93, 0.15)',
+          borderRadius: '8px',
+          padding: '28px 24px',
+          position: 'relative',
+          color: '#e5dec9',
+          boxSizing: 'border-box',
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         <button type="button" className="auth-modal-close" onClick={onClose}>
@@ -294,4 +333,8 @@ export default function ShareRemoteModal({ isOpen, onClose }) {
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined'
+    ? createPortal(modalNode, document.body)
+    : modalNode;
 }

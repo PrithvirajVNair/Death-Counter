@@ -5,6 +5,7 @@ import {
   resetState,
   verifyStreamerAuth,
   validateModeratorToken,
+  hashToken,
 } from './_db.js';
 
 const ALLOWED_ACTIONS = new Set([
@@ -26,51 +27,56 @@ const ALLOWED_ACTIONS = new Set([
 
 const MAX_BODY_BYTES = 65536; // 64 KB limit
 
-// ─── Distributed / Sliding Window Rate Limiting (Upstash Redis + Local Fallback) ───
+// ─── Distributed / Sliding Window Rate Limiting (Upstash Redis + Instance-Local Fallback) ───
 const rateLimitMap = globalThis.__SDC_RATE_LIMITS__ || (globalThis.__SDC_RATE_LIMITS__ = new Map());
 
+export const LUA_RATE_LIMIT = `
+local cur = redis.call('INCR', KEYS[1])
+if cur == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+local ttl = redis.call('TTL', KEYS[1])
+if ttl < 0 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+  ttl = tonumber(ARGV[1])
+end
+return {cur, ttl}
+`.trim();
+
 /**
- * Distributed rate limiter with atomic Redis operations and local memory fallback.
- * - Under Redis: Pipeline executes [INCR, key] and [TTL, key].
- *   EXPIRE is set strictly when key is created (count === 1) or TTL is unset (< 0).
- *   Blocked requests increment or remain rejected but NEVER extend their own lockout.
- * - Under local fallback: Sliding window tracks window start timestamp without extending on blocked requests.
- *   Clearly returns distributed: false to never claim distributed protection when running locally.
+ * Distributed rate limiter using atomic Redis Lua script and instance-local memory fallback.
+ * - Under Redis: Executes atomic Lua script via EVAL command.
+ *   INCR and EXPIRE execute atomically in a single Redis transaction.
+ *   EXPIRE is set strictly when key is initialized (cur == 1) or TTL is unset (< 0).
+ *   Blocked requests (cur > limit) NEVER refresh or extend the window expiry.
+ *   Concurrent requests cannot race or corrupt the initial window TTL.
+ * - Under local fallback: Instance-local in-memory sliding window tracks window start timestamp
+ *   without extending on blocked requests. Explicitly returns distributed: false.
+ * - Security: No raw credentials or tokens are logged or included in rate limit keys.
  */
 export async function checkRateLimit(key, limit, windowSeconds) {
   const redisUrl = process.env.UPSTASH_REDIS_REST_URL;
   const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
 
-  // 1. Distributed Rate Limiting via Upstash Redis REST if configured
+  // 1. Distributed Rate Limiting via Upstash Redis REST (Atomic Lua Script) if configured
   if (redisUrl && redisToken) {
     try {
       const redisKey = `sdc:rl:${key}`;
-      const pipelineUrl = `${redisUrl.replace(/\/$/, '')}/pipeline`;
-      const res = await fetch(pipelineUrl, {
+      const baseUrl = redisUrl.replace(/\/$/, '');
+      const res = await fetch(baseUrl, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${redisToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify([
-          ['INCR', redisKey],
-          ['TTL', redisKey],
-        ]),
+        body: JSON.stringify(['EVAL', LUA_RATE_LIMIT, 1, redisKey, windowSeconds]),
       });
 
       if (res.ok) {
-        const results = await res.json();
-        const currentCount = Number(results[0]?.result) || 1;
-        const ttl = Number(results[1]?.result);
-
-        // Set expiry ONLY when key is freshly created or missing TTL.
-        // Blocked requests do NOT call EXPIRE, preventing indefinite lockout extension.
-        if (currentCount === 1 || ttl < 0) {
-          await fetch(`${redisUrl.replace(/\/$/, '')}/expire/${encodeURIComponent(redisKey)}/${windowSeconds}`, {
-            headers: { Authorization: `Bearer ${redisToken}` },
-          }).catch(() => {});
-        }
-
+        const data = await res.json();
+        const resultArray = Array.isArray(data?.result) ? data.result : [];
+        const currentCount = Number(resultArray[0]) || 1;
+        const ttl = Number(resultArray[1]);
         const resetSeconds = Math.max(1, ttl > 0 ? ttl : windowSeconds);
 
         if (currentCount > limit) {
@@ -79,11 +85,11 @@ export async function checkRateLimit(key, limit, windowSeconds) {
         return { allowed: true, remaining: Math.max(0, limit - currentCount), resetSeconds, distributed: true };
       }
     } catch (e) {
-      console.warn('[RateLimit] Upstash Redis request failed, falling back to local memory:', e.message);
+      console.warn('[RateLimit] Upstash Redis request failed, falling back to instance-local memory:', e.message);
     }
   }
 
-  // 2. Local in-memory sliding window fallback (active only when Redis is unavailable)
+  // 2. Instance-local in-memory sliding window fallback (active only when Redis is unavailable)
   const now = Date.now();
   const windowMs = windowSeconds * 1000;
   let record = rateLimitMap.get(key);
@@ -95,7 +101,7 @@ export async function checkRateLimit(key, limit, windowSeconds) {
   }
 
   record.count += 1;
-  // Window reset time is anchored to window start and does not advance on blocked requests
+  // Window reset time is anchored strictly to window start and does NOT advance on blocked requests
   const resetSeconds = Math.max(1, Math.ceil((record.startTime + windowMs - now) / 1000));
 
   if (record.count > limit) {
@@ -201,10 +207,9 @@ export default async function handler(req, res) {
     const isResetPath = pathname.endsWith('/reset') || pathname.includes('/reset');
     const isValidateTokenPath = pathname.endsWith('/validate-token') || pathname.includes('/validate-token');
 
-    const queryToken = (url.searchParams.get('token') || '').trim();
     const queryKey = (url.searchParams.get('key') || url.searchParams.get('streamerKey') || url.searchParams.get('channel') || '').trim();
 
-    // ─── 1. Remote Token Validation (POST preferred, GET supported) ───
+    // ─── 1. Remote Token Validation (X-Moderator-Token header ONLY) ───
     if (isValidateTokenPath) {
       const rl = await checkRateLimit(`ip:val:${clientIp}`, 30, 60);
       if (!rl.allowed) {
@@ -216,26 +221,19 @@ export default async function handler(req, res) {
         });
       }
 
-      let rawTokenToValidate = queryToken;
-      if (req.method === 'POST') {
-        const headerToken = req.headers['x-moderator-token'];
-        if (headerToken) {
-          rawTokenToValidate = String(headerToken).trim();
-        } else {
-          const body = await parseBody(req);
-          if (body && body.token) rawTokenToValidate = String(body.token).trim();
-        }
-      }
+      // Strictly require moderator credentials via X-Moderator-Token header
+      // Query parameters (?token=...) and JSON request body (body.token) are rejected
+      const headerToken = (req.headers['x-moderator-token'] || '').trim();
 
-      if (!rawTokenToValidate) {
+      if (!headerToken) {
         return res.status(400).json({
           success: false,
           ok: false,
-          error: { code: 'MISSING_TOKEN', message: 'Token parameter or X-Moderator-Token header is required.' },
+          error: { code: 'MISSING_TOKEN', message: 'X-Moderator-Token header is required.' },
         });
       }
 
-      const valResult = await validateModeratorToken(rawTokenToValidate);
+      const valResult = await validateModeratorToken(headerToken);
       if (!valResult.valid) {
         return res.status(401).json({
           success: false,
@@ -318,8 +316,6 @@ export default async function handler(req, res) {
     // ─── Authentication & Authorization Verification ───
     const authHeader = req.headers['authorization'] || '';
     const moderatorHeader = (req.headers['x-moderator-token'] || '').trim();
-    const legacyBodyToken = (body.token ? String(body.token).trim() : '');
-    const legacyQueryToken = (queryToken || '').trim();
     const explicitKey = (body.key || body.streamerKey || body.channel || queryKey || '').trim();
 
     let authorizedStreamerKey = null;
@@ -327,9 +323,9 @@ export default async function handler(req, res) {
     let moderatorPermissions = null;
     let activeToken = '';
 
-    // 1. Remote Moderator Token Authentication via X-Moderator-Token (or legacy body/query fallback)
-    if (moderatorHeader || legacyBodyToken || legacyQueryToken) {
-      activeToken = moderatorHeader || legacyBodyToken || legacyQueryToken;
+    // 1. Remote Moderator Token Authentication strictly via X-Moderator-Token header
+    if (moderatorHeader) {
+      activeToken = moderatorHeader;
       const tokenResult = await validateModeratorToken(activeToken);
       if (!tokenResult.valid) {
         return res.status(401).json({
@@ -385,21 +381,21 @@ export default async function handler(req, res) {
       authorizedStreamerKey = verifiedStreamer.streamerKey;
       authType = 'streamer';
     } else {
-      // STRICT: Neither JWT nor Moderator Token provided. Streamer key alone is NOT sufficient!
+      // STRICT: Neither valid Bearer JWT nor X-Moderator-Token provided. Streamer key alone is NOT sufficient!
       return res.status(401).json({
         success: false,
         ok: false,
         error: {
           code: 'UNAUTHORIZED',
-          message: 'Authentication required. Provide a valid Bearer token (for streamers) or a Moderator token.',
+          message: 'Authentication required. Provide a valid Bearer token (for streamers) or an X-Moderator-Token header.',
         },
       });
     }
 
-    // Rate Limiting per Streamer / Token
+    // Rate Limiting per Streamer / Token (hashed token key to avoid leaking credentials)
     const rateLimitKey = authType === 'streamer'
       ? `streamer:${authorizedStreamerKey}`
-      : `token:${activeToken.slice(0, 16)}`;
+      : `token:${hashToken(activeToken).slice(0, 16)}`;
     const limitMax = authType === 'streamer' ? 120 : 60;
     const rl = await checkRateLimit(rateLimitKey, limitMax, 60);
 

@@ -1,7 +1,7 @@
 /**
  * Dedicated Release Packaging Script
  * Generates a clean, auditable release ZIP using an explicit allowlist and pure Node.js ZIP creation.
- * Excludes: .env, node_modules, .git, logs, development utilities, obsolete binaries.
+ * Excludes: .env, node_modules, .git, logs, development utilities, obsolete binaries, shell scripts.
  * Preserves: Production dist, API backend, migrations, docs.
  */
 
@@ -20,12 +20,33 @@ const STAGING_DIR = path.join(RELEASE_DIR, 'package');
 const ZIP_NAME = 'souls-death-counter-release.zip';
 const ZIP_PATH = path.join(RELEASE_DIR, ZIP_NAME);
 
-function sha256(filePath) {
+// Standard IEEE 802.3 CRC32 lookup table for universal compatibility across Node versions
+const CRC_TABLE = new Uint32Array(256);
+for (let i = 0; i < 256; i++) {
+  let c = i;
+  for (let k = 0; k < 8; k++) {
+    c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+  }
+  CRC_TABLE[i] = c >>> 0;
+}
+
+export function calculateCrc32(buf) {
+  if (typeof zlib.crc32 === 'function') {
+    return zlib.crc32(buf);
+  }
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    crc = CRC_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+export function sha256(filePath) {
   const data = fs.readFileSync(filePath);
   return crypto.createHash('sha256').update(data).digest('hex');
 }
 
-function copyRecursive(src, dest) {
+export function copyRecursive(src, dest) {
   const stat = fs.statSync(src);
   if (stat.isDirectory()) {
     if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
@@ -39,7 +60,7 @@ function copyRecursive(src, dest) {
   }
 }
 
-function collectAllFiles(dir) {
+export function collectAllFiles(dir) {
   let results = [];
   if (!fs.existsSync(dir)) return results;
   const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -56,9 +77,9 @@ function collectAllFiles(dir) {
 
 /**
  * Pure Node.js standard ZIP archiver (RFC 1951 Deflate + PKZip standard format)
- * Eliminates external shell or PowerShell dependencies.
+ * Fully compatible with Windows Explorer and standard archive utilities.
  */
-function createPureNodeZip(stagingDir, zipPath) {
+export function createPureNodeZip(stagingDir, zipPath) {
   const allFiles = collectAllFiles(stagingDir);
   const localHeaders = [];
   const centralHeaders = [];
@@ -69,7 +90,7 @@ function createPureNodeZip(stagingDir, zipPath) {
     const filenameBuf = Buffer.from(relPath, 'utf8');
     const uncompressedData = fs.readFileSync(absPath);
     const compressedData = zlib.deflateRawSync(uncompressedData);
-    const crc = zlib.crc32(uncompressedData);
+    const crc = calculateCrc32(uncompressedData);
 
     const mtime = fs.statSync(absPath).mtime;
     const dosTime = ((mtime.getHours() << 11) | (mtime.getMinutes() << 5) | (mtime.getSeconds() >> 1)) & 0xffff;
@@ -134,6 +155,97 @@ function createPureNodeZip(stagingDir, zipPath) {
   fs.writeFileSync(zipPath, Buffer.concat(allBuffers));
 }
 
+/**
+ * Comprehensive ZIP archive validator:
+ * Verifies standard PKZip structures, decompressibility, CRC32, file sizes, and file names.
+ */
+export function verifyZipArchive(zipPath, stagingDir = null) {
+  const buf = fs.readFileSync(zipPath);
+  if (buf.length < 22) throw new Error('ZIP file too small to contain EOCD record');
+
+  // Locate End of Central Directory (EOCD signature: 0x06054b50)
+  let eocdOffset = -1;
+  for (let i = buf.length - 22; i >= 0; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) {
+      eocdOffset = i;
+      break;
+    }
+  }
+  if (eocdOffset === -1) throw new Error('Invalid ZIP archive: End of Central Directory signature not found');
+
+  const totalEntries = buf.readUInt16LE(eocdOffset + 10);
+  const cdSize = buf.readUInt32LE(eocdOffset + 12);
+  const cdOffset = buf.readUInt32LE(eocdOffset + 16);
+
+  console.log(`[ZIP Verifier] Validating archive: ${totalEntries} entries, CD size: ${cdSize} bytes`);
+
+  let p = cdOffset;
+  const verifiedEntries = [];
+
+  for (let idx = 0; idx < totalEntries; idx++) {
+    if (buf.readUInt32LE(p) !== 0x02014b50) {
+      throw new Error(`Corrupted Central Directory header signature at offset ${p}`);
+    }
+
+    const compMethod = buf.readUInt16LE(p + 10);
+    const expectedCrc = buf.readUInt32LE(p + 16);
+    const compSize = buf.readUInt32LE(p + 20);
+    const uncompSize = buf.readUInt32LE(p + 24);
+    const fnLen = buf.readUInt16LE(p + 28);
+    const extraLen = buf.readUInt16LE(p + 30);
+    const commentLen = buf.readUInt16LE(p + 32);
+    const localHeaderOffset = buf.readUInt32LE(p + 42);
+
+    const fileName = buf.toString('utf8', p + 46, p + 46 + fnLen);
+    p += 46 + fnLen + extraLen + commentLen;
+
+    // Verify local header signature
+    if (buf.readUInt32LE(localHeaderOffset) !== 0x04034b50) {
+      throw new Error(`Corrupted Local File Header signature for ${fileName} at offset ${localHeaderOffset}`);
+    }
+    const localFnLen = buf.readUInt16LE(localHeaderOffset + 26);
+    const localExtraLen = buf.readUInt16LE(localHeaderOffset + 28);
+    const dataOffset = localHeaderOffset + 30 + localFnLen + localExtraLen;
+
+    const compData = buf.subarray(dataOffset, dataOffset + compSize);
+    let uncompData;
+    if (compMethod === 8) {
+      uncompData = zlib.inflateRawSync(compData);
+    } else if (compMethod === 0) {
+      uncompData = compData;
+    } else {
+      throw new Error(`Unsupported compression method ${compMethod} for ${fileName}`);
+    }
+
+    if (uncompData.length !== uncompSize) {
+      throw new Error(`Size mismatch for ${fileName}: expected ${uncompSize}, uncompressed ${uncompData.length}`);
+    }
+
+    const actualCrc = calculateCrc32(uncompData);
+    if (actualCrc !== expectedCrc) {
+      throw new Error(`CRC32 mismatch for ${fileName}: expected ${expectedCrc}, got ${actualCrc}`);
+    }
+
+    // Verify consistency with staging disk files if staging directory provided
+    if (stagingDir) {
+      const diskPath = path.join(stagingDir, fileName);
+      if (fs.existsSync(diskPath)) {
+        const diskData = fs.readFileSync(diskPath);
+        if (diskData.length !== uncompSize) {
+          throw new Error(`Staging disk size mismatch for ${fileName}`);
+        }
+        if (calculateCrc32(diskData) !== actualCrc) {
+          throw new Error(`Staging disk CRC mismatch for ${fileName}`);
+        }
+      }
+    }
+
+    verifiedEntries.push({ fileName, uncompSize, compSize, crc: actualCrc });
+  }
+
+  return verifiedEntries;
+}
+
 export function packageRelease() {
   console.log('====================================================');
   console.log('  SOULS DEATH COUNTER - CLEAN RELEASE PACKAGER');
@@ -160,6 +272,7 @@ export function packageRelease() {
     { src: 'supabase_schema.sql', dest: 'supabase_schema.sql' },
     { src: 'supabase_migration_v2.sql', dest: 'supabase_migration_v2.sql' },
     { src: 'supabase_migration_v3_cleanup.sql', dest: 'supabase_migration_v3_cleanup.sql' },
+    { src: 'supabase_migration_v4_production.sql', dest: 'supabase_migration_v4_production.sql' },
     { src: 'package.json', dest: 'package.json' },
     { src: 'package-lock.json', dest: 'package-lock.json' },
     { src: 'vercel.json', dest: 'vercel.json' },
@@ -186,24 +299,26 @@ export function packageRelease() {
     const rel = path.relative(STAGING_DIR, file).replace(/\\/g, '/');
     const base = path.basename(file).toLowerCase();
 
-    // Check for forbidden items in staging
+    // Reject .env and secret-bearing files
     if (base === '.env' || (base.startsWith('.env.') && base !== '.env.example')) {
       throw new Error(`CRITICAL: Secret file detected in staging package: ${rel}`);
     }
+    // Reject logs
     if (base.endsWith('.log')) {
       throw new Error(`CRITICAL: Log file detected in staging package: ${rel}`);
     }
+    // Reject VCS & dependencies
     if (rel.includes('node_modules') || rel.includes('.git')) {
       throw new Error(`CRITICAL: Dependency/VCS dir detected in staging package: ${rel}`);
     }
-
-    if (base.endsWith('.exe') || base.endsWith('.dll')) {
-      throw new Error(`CRITICAL: Executable detected in staging package: ${rel}`);
+    // Reject executables and scripts (.exe, .dll, .bat, .cmd, .ps1)
+    if (/\.(exe|dll|bat|cmd|ps1)$/i.test(base)) {
+      throw new Error(`CRITICAL: Executable or script detected in staging package: ${rel}`);
     }
   }
 
   console.log(`  ✓ Total files staged: ${stagedFiles.length}`);
-  console.log(`  ✓ Total executables staged: 0 (Pure Web Application)`);
+  console.log(`  ✓ Total executables / native scripts staged: 0 (Pure Web Application)`);
 
   // Step 5: Archive Staged Package into ZIP via pure Node.js
   console.log(`\n[Packaging] Compressing into ${ZIP_NAME}...`);
@@ -216,7 +331,15 @@ export function packageRelease() {
   const zipSize = fs.statSync(ZIP_PATH).size;
   const zipSha = sha256(ZIP_PATH);
 
-  // Step 6: Generate CHECKSUMS.txt
+  // Step 6: Post-Archive Integrity Verification (CRC32, decompressibility, file counts)
+  console.log('\n[Packaging] Performing post-archive integrity verification...');
+  const verifiedEntries = verifyZipArchive(ZIP_PATH, STAGING_DIR);
+  if (verifiedEntries.length !== stagedFiles.length) {
+    throw new Error(`Entry count mismatch: staged ${stagedFiles.length}, verified in ZIP ${verifiedEntries.length}`);
+  }
+  console.log(`  ✓ Successfully verified all ${verifiedEntries.length} archive entries (CRC32, sizes, and headers verified).`);
+
+  // Step 7: Generate CHECKSUMS.txt
   const checksumContent = [
     `# Souls Game Death Counter (SDC) Release Checksums`,
     `# Generated: ${new Date().toISOString()}`,

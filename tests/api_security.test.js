@@ -242,19 +242,88 @@ describe('API Security, Endpoint Authorization & Public Projection', () => {
     assert.equal(res.body.error.code, 'METHOD_NOT_ALLOWED');
   });
 
-  it('GET /api/validate-token validates token format and requires parameter', async () => {
-    const { req, res } = createMockReqRes({ method: 'GET', url: '/api/validate-token' });
+  it('POST /api/validate-token requires X-Moderator-Token header', async () => {
+    const { req, res } = createMockReqRes({ method: 'POST', url: '/api/validate-token' });
     await handler(req, res);
     assert.equal(res.statusCode, 400);
     assert.equal(res.body.error.code, 'MISSING_TOKEN');
   });
 
-  it('GET /api/validate-token with valid token returns permissions and streamer info', async () => {
+  it('GET /api/validate-token?token=... (query token) is rejected with 400', async () => {
     const { req, res } = createMockReqRes({ method: 'GET', url: '/api/validate-token?token=valid-token' });
+    await handler(req, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.error.code, 'MISSING_TOKEN');
+  });
+
+  it('POST /api/validate-token with body.token is rejected with 400', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/validate-token',
+      body: { token: 'valid-token' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.error.code, 'MISSING_TOKEN');
+  });
+
+  it('POST /api/validate-token with valid X-Moderator-Token header succeeds with 200', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/validate-token',
+      headers: { 'x-moderator-token': 'valid-token' },
+    });
     await handler(req, res);
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.valid, true);
     assert.equal(res.body.streamerKey, 'test-streamer');
     assert.equal(res.body.permissions.can_increment_deaths, true);
+  });
+
+  it('POST /api/action with query token (?token=...) fails with 401 UNAUTHORIZED', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/action?token=valid-token',
+      body: { action: 'add', operationId: 'op_query_auth_fail_1' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.body.error.code, 'UNAUTHORIZED');
+  });
+
+  it('POST /api/action with body.token fails with 401 UNAUTHORIZED', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/action',
+      body: { token: 'valid-token', action: 'add', operationId: 'op_body_auth_fail_1' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.body.error.code, 'UNAUTHORIZED');
+  });
+
+  it('POST /api/action with invalid X-Moderator-Token header fails with 401 INVALID_TOKEN', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/action',
+      headers: { 'x-moderator-token': 'rmt_invalid_token_999' },
+      body: { action: 'add', operationId: 'op_invalid_header_1' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.body.error.code, 'INVALID_TOKEN');
+  });
+
+  it('POST /api/action with valid X-Moderator-Token header succeeds with 200', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/action',
+      headers: { 'x-moderator-token': 'valid-token' },
+      body: { action: 'add', operationId: 'op_header_auth_succ_1' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.action, 'add');
   });
 });

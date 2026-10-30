@@ -43,6 +43,7 @@ hotkey.log
 startup_error.log
 constructor_error.log
 unhandled_thread_error.log
+death-counter-data.json
 
 # Release packages and archives
 release/

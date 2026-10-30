@@ -16,19 +16,22 @@ A Soulsborne-inspired death counter, boss tracker, and overlay system built for 
 
 ## 2. Security Architecture
 
-### Row-Level Security (RLS) & Isolation
+### Row-Level Security (RLS) & Column-Level Shielding
 - **Ownership Enforcement**: Streamer records in `public.streamer_states` enforce `auth.uid() = user_id` for both `USING` and `WITH CHECK` on `INSERT`, `UPDATE`, and `DELETE`.
-- **Public Data Shielding**: Public OBS overlay clients (`anon` role) are strictly restricted via column-level privileges. Sensitive account fields (`email`, `user_id`) cannot be queried anonymously. The public overlay queries only display state (`streamer_key, deaths, session_deaths, all_time_deaths, boss_kills, settings, shortcuts, bosses, current_boss, revision, last_updated`).
+- **Explicit Column-Level Least Privilege**: Broad table-level `SELECT` on `public.streamer_states` is revoked from `anon` and `public`. The `anon` role is granted access strictly to display columns (`streamer_key, deaths, session_deaths, all_time_deaths, boss_kills, settings, shortcuts, bosses, current_boss, revision, last_updated`). Private account fields (`email`, `user_id`, `id`, `created_at`) cannot be queried anonymously under any circumstances.
+- **Remote Tokens Isolation**: The `public.streamer_remote_tokens` table is entirely inaccessible to anonymous callers (`REVOKE ALL FROM anon, public`).
 
-### Cryptographic Keys & Token Delegation
-- **Streamer Keys**: Generated using cryptographically secure pseudorandom number generators (`crypto.getRandomValues` in browser, `crypto.randomBytes` on server).
-- **Remote Moderator Tokens**: Generated securely and stored in `public.streamer_remote_tokens` as **SHA-256 hashes**. Raw tokens are never stored in the database and are presented only once during link creation. Tokens support time-based expiration (1 hr, 6 hr, 24 hr, 7 days, permanent) and immediate revocation.
-- **Zero-Trust Token Validation**: Remote actions are strictly validated against token expiration and permissions on the server. Supplying a streamer key alone does not grant moderator authorization.
+### Cryptographic Keys & Transactional Token Delegation
+- **Streamer Keys**: Generated using cryptographically secure PRNGs (`crypto.getRandomValues`).
+- **Transactional Streamer Key Regeneration**: Handled exclusively via the authenticated PostgreSQL RPC `regenerate_streamer_key(p_new_key)`. The RPC validates caller identity (`auth.uid()`), acquires a `SELECT ... FOR UPDATE` row lock, enforces key uniqueness, transactionally updates `streamer_states` and associated `streamer_remote_tokens`, and increments `revision`. Supabase Auth metadata is reconciled only after database transaction success.
+- **Header-Only Moderator Authentication**: Moderator credentials are accepted exclusively through the `X-Moderator-Token` HTTP header. Legacy query parameters (`?token=...`) and JSON body fields (`body.token`) are rejected across all API endpoints. Raw tokens are never logged.
+- **Remote Moderator Tokens**: Stored as **SHA-256 hashes**. Raw tokens are never persisted in the database and are presented only once during creation. Tokens support time-based expiration (1 hr, 6 hr, 24 hr, 7 days, permanent) and immediate revocation.
 
-### Atomic Mutations & Idempotency
-- **Atomic Database RPC**: All counter modifications (`add`, `undo`, `addBossKill`, `undoBossKill`, `setDeath`, `resetSession`, `resetAll`) execute via the `mutate_counter` PostgreSQL function with `SELECT ... FOR UPDATE` row locks. This completely prevents lost updates from concurrent clicks or network retries.
-- **Operation Idempotency**: Each mutation supports an `operation_id` logged in `public.operation_idempotency`. Retrying the same operation ID returns the authoritative state without re-executing the counter mutation.
+### Atomic Mutations, Idempotency & Distributed Rate Limiting
+- **Atomic Database RPC**: All counter modifications (`add`, `undo`, `addBossKill`, `undoBossKill`, `setDeath`, `resetSession`, `resetAll`) execute via the `mutate_counter` PostgreSQL function with `SELECT ... FOR UPDATE` row locks, preventing race conditions.
+- **Operation Idempotency**: Each mutation requires an `operation_id` logged in `public.operation_idempotency`. Retrying the same operation ID returns the authoritative state without re-mutating counters.
 - **Monotonic Revision Numbers**: Every mutation increments `revision BIGINT`. Stale or out-of-order network responses are rejected by clients.
+- **Distributed Atomic Rate Limiter**: Uses atomic Upstash Redis Lua scripts (`EVAL`) for increment and TTL initialization. Blocked requests never extend lockout windows, and concurrent requests cannot corrupt window TTLs. When Redis is unavailable, an instance-local memory sliding window fallback activates (`distributed: false`).
 
 ---
 
@@ -42,11 +45,14 @@ VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=eyJhbGciOi...
 
 # Serverless API (Server-side only — DO NOT prefix with VITE_)
-# Optional if using direct Supabase client with anon key and RPC
 SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOi...
+
+# Optional: Upstash Redis for distributed rate limiting
+UPSTASH_REDIS_REST_URL=https://...upstash.io
+UPSTASH_REDIS_REST_TOKEN=AX...
 ```
 
-> **Security Note**: Never expose `SUPABASE_SERVICE_ROLE_KEY` to the frontend or prefix it with `VITE_`.
+> **Security Note**: Never expose `SUPABASE_SERVICE_ROLE_KEY` or `UPSTASH_REDIS_REST_TOKEN` to the frontend or prefix them with `VITE_`.
 
 ---
 
@@ -54,22 +60,17 @@ SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOi...
 
 If setting up a fresh database, execute `supabase_schema.sql` in the Supabase SQL Editor.
 
-If upgrading an existing SDC database with historical data, run `supabase_migration_v2.sql` to non-destructively apply:
-1. `revision BIGINT NOT NULL DEFAULT 0` column.
-2. `token_hash VARCHAR(64)` column and index on `public.streamer_remote_tokens`.
-3. `public.operation_idempotency` table with automatic TTL cleanup.
-4. `public.mutate_counter` atomic RPC function.
-5. Column-level `GRANT SELECT` privileges to `anon`.
-6. Strict RLS policies on `streamer_states`, `streamer_remote_tokens`, and `operation_idempotency`.
-
-To clean up legacy companion tokens, run `supabase_migration_v3_cleanup.sql`.
+If upgrading an existing SDC database with historical data, run the sequential migrations:
+1. `supabase_migration_v2.sql`: Applies monotonic revisions, token hashes, idempotency table, and `mutate_counter` RPC.
+2. `supabase_migration_v3_cleanup.sql`: Purges legacy companion tokens from `streamer_remote_tokens`.
+3. `supabase_migration_v4_production.sql`: Enforces column-level `GRANT SELECT` privileges on `streamer_states` and deploys `regenerate_streamer_key` RPC.
 
 ---
 
 ## 5. Development & Building
 
 ### Prerequisites
-- Node.js 18.0 or later
+- Node.js 20.19.0 or later (required for Vite 8 and pure Node ZIP packaging)
 - npm 9.0 or later
 
 ### Install Dependencies

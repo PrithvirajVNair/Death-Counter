@@ -90,6 +90,24 @@ begin
   revoke update on public.streamer_states from public, anon, authenticated;
   grant update (settings, shortcuts, bosses, current_boss, display_name, avatar_url, updated_at) on public.streamer_states to authenticated;
 
+  -- Column-Level SELECT Restrictions: Shield private fields (email, user_id, id, created_at) from anonymous access
+  revoke select on public.streamer_states from public, anon;
+  grant select (
+    streamer_key,
+    deaths,
+    session_deaths,
+    all_time_deaths,
+    boss_kills,
+    settings,
+    shortcuts,
+    bosses,
+    current_boss,
+    revision,
+    last_updated
+  ) on public.streamer_states to anon;
+  grant select on public.streamer_states to authenticated;
+  grant all on public.streamer_states to service_role;
+
   -- 7.2 streamer_remote_tokens policies (Strict Privacy: Never readable by anonymous users)
   drop policy if exists "Streamers manage own tokens" on public.streamer_remote_tokens;
   drop policy if exists "Public remote tokens read" on public.streamer_remote_tokens;
@@ -553,3 +571,81 @@ $$;
 
 revoke all on function public.update_streamer_config(text, jsonb, jsonb, jsonb, text, text) from public, anon;
 grant execute on function public.update_streamer_config(text, jsonb, jsonb, jsonb, text, text) to authenticated, service_role;
+
+-- 8.4 Dedicated Authenticated Streamer Key Regeneration RPC
+create or replace function public.regenerate_streamer_key(p_new_key text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_user_id uuid;
+  v_old_key text;
+  v_revision bigint;
+  v_now_ms bigint;
+  v_existing_owner uuid;
+begin
+  -- 1. Verify caller is authenticated
+  v_user_id := auth.uid();
+  if v_user_id is null then
+    raise exception 'Unauthorized: Authentication required to regenerate streamer key';
+  end if;
+
+  -- 2. Validate new key format (8-64 alphanumeric characters, underscores, dashes)
+  if p_new_key is null or length(trim(p_new_key)) < 8 or length(trim(p_new_key)) > 64 or trim(p_new_key) !~ '^[a-zA-Z0-9_-]+$' then
+    raise exception 'Invalid streamer key format. Must be 8-64 alphanumeric characters, underscores or dashes.';
+  end if;
+
+  p_new_key := trim(p_new_key);
+  v_now_ms := (extract(epoch from clock_timestamp()) * 1000)::bigint;
+
+  -- 3. Check uniqueness across other accounts
+  select user_id into v_existing_owner
+  from public.streamer_states
+  where streamer_key = p_new_key;
+
+  if v_existing_owner is not null and v_existing_owner <> v_user_id then
+    raise exception 'Uniqueness conflict: Streamer key is already in use by another account';
+  end if;
+
+  -- 4. Lock the streamer record FOR UPDATE to serialize operations
+  select streamer_key, revision
+  into v_old_key, v_revision
+  from public.streamer_states
+  where user_id = v_user_id
+  for update;
+
+  if not found then
+    raise exception 'Streamer state record not found for user %', v_user_id;
+  end if;
+
+  -- 5. Transactionally update streamer_states
+  update public.streamer_states
+  set
+    streamer_key = p_new_key,
+    revision = v_revision + 1,
+    last_updated = v_now_ms,
+    updated_at = now()
+  where user_id = v_user_id;
+
+  -- 6. Update associated moderator tokens so existing moderator links continue working
+  if v_old_key is not null and v_old_key <> p_new_key then
+    update public.streamer_remote_tokens
+    set streamer_key = p_new_key
+    where user_id = v_user_id;
+  end if;
+
+  return jsonb_build_object(
+    'success', true,
+    'streamer_key', p_new_key,
+    'old_streamer_key', v_old_key,
+    'revision', v_revision + 1,
+    'last_updated', v_now_ms
+  );
+end;
+$$;
+
+revoke all on function public.regenerate_streamer_key(text) from public, anon;
+grant execute on function public.regenerate_streamer_key(text) to authenticated, service_role;
+

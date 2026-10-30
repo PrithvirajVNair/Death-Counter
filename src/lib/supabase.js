@@ -95,23 +95,31 @@ export async function regenerateStreamerKey(user) {
 
   const newKey = generateStreamerKey();
 
-  // 1. Update user metadata
-  const { error: authError } = await supabase.auth.updateUser({
-    data: { streamerKey: newKey },
+  // 1. Transactionally update database via dedicated authenticated RPC
+  const { data, error: rpcError } = await supabase.rpc("regenerate_streamer_key", {
+    p_new_key: newKey,
   });
-  if (authError) throw authError;
 
-  // 2. Update streamer_states table
-  const { error: dbError } = await supabase
-    .from("streamer_states")
-    .update({ streamer_key: newKey, updated_at: new Date().toISOString() })
-    .eq("user_id", user.id);
-
-  if (dbError) {
-    console.warn("Could not update streamer_key in streamer_states table:", dbError);
+  if (rpcError) {
+    console.error("Database failed to regenerate streamer key:", rpcError);
+    throw new Error(rpcError.message || "Failed to regenerate streamer key in database");
   }
 
-  return newKey;
+  const authoritativeKey = data?.streamer_key || newKey;
+
+  // 2. Reconcile Auth user metadata ONLY after database persistence succeeds
+  try {
+    const { error: authError } = await supabase.auth.updateUser({
+      data: { streamerKey: authoritativeKey },
+    });
+    if (authError) {
+      console.warn("Streamer key saved in database but could not sync Auth metadata:", authError.message);
+    }
+  } catch (authErr) {
+    console.warn("Non-fatal error updating Auth metadata after database success:", authErr.message);
+  }
+
+  return authoritativeKey;
 }
 
 /**

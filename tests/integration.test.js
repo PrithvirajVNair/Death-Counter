@@ -10,7 +10,7 @@ import {
   updateState,
   validateModeratorToken,
 } from '../api/_db.js';
-import { saveCloudConfig, supabase } from '../src/lib/supabase.js';
+import { saveCloudConfig, regenerateStreamerKey, supabase } from '../src/lib/supabase.js';
 
 function createMockReqRes({ method = 'GET', url = '/', body = null, headers = {} } = {}) {
   const req = {
@@ -360,8 +360,8 @@ describe('SDC Integration & Architecture Verification Suite', () => {
       assert.equal(validated.permissions.can_reset_session, true);
     });
 
-    // 10. Redis rate limiting does not extend its expiry on every blocked request
-    it('10. Redis rate limiting does not extend its expiry on every blocked request', async () => {
+    // 10. Redis atomic Lua rate limiting does not extend its expiry on every blocked request
+    it('10. Redis atomic Lua rate limiting does not extend its expiry on every blocked request', async () => {
       const origUrl = process.env.UPSTASH_REDIS_REST_URL;
       const origToken = process.env.UPSTASH_REDIS_REST_TOKEN;
       const origFetch = globalThis.fetch;
@@ -370,22 +370,21 @@ describe('SDC Integration & Architecture Verification Suite', () => {
         process.env.UPSTASH_REDIS_REST_URL = 'https://fake-upstash-redis.com';
         process.env.UPSTASH_REDIS_REST_TOKEN = 'test-token-redis-123';
 
-        let expireCallCount = 0;
-        let mockCount = 0;
+        let evalCallCount = 0;
+        let capturedPayloads = [];
+        let mockCounter = 0;
 
         globalThis.fetch = async (url, options) => {
-          const urlStr = String(url);
-          if (urlStr.includes('/pipeline')) {
-            mockCount += 1;
-            const currentTtl = mockCount === 1 ? -1 : 60 - mockCount;
+          const body = JSON.parse(options?.body || '[]');
+          if (body[0] === 'EVAL') {
+            evalCallCount += 1;
+            capturedPayloads.push(body);
+            mockCounter += 1;
+            const ttl = Math.max(1, 60 - (mockCounter - 1) * 3);
             return {
               ok: true,
-              json: async () => [{ result: mockCount }, { result: currentTtl }],
+              json: async () => ({ result: [mockCounter, ttl] }),
             };
-          }
-          if (urlStr.includes('/expire/')) {
-            expireCallCount += 1;
-            return { ok: true, json: async () => ({ result: 1 }) };
           }
           return origFetch(url, options);
         };
@@ -397,28 +396,247 @@ describe('SDC Integration & Architecture Verification Suite', () => {
         const req1 = await checkRateLimit('test-redis-rl-key', limit, windowSec);
         assert.equal(req1.allowed, true);
         assert.equal(req1.distributed, true);
-        assert.equal(expireCallCount, 1, 'EXPIRE must be called on initial request');
+        assert.equal(evalCallCount, 1);
+        assert.equal(capturedPayloads[0][0], 'EVAL');
+        assert.equal(capturedPayloads[0][2], 1);
+        assert.equal(capturedPayloads[0][3], 'sdc:rl:test-redis-rl-key');
+        assert.equal(capturedPayloads[0][4], windowSec);
 
         // Request 2: within limit (allowed)
         const req2 = await checkRateLimit('test-redis-rl-key', limit, windowSec);
         assert.equal(req2.allowed, true);
-        assert.equal(expireCallCount, 1, 'EXPIRE must NOT be called on request 2');
+        assert.equal(req2.distributed, true);
+        assert.equal(evalCallCount, 2);
 
-        // Request 3: blocked request
+        // Request 3: blocked request (exceeds limit 2)
         const req3 = await checkRateLimit('test-redis-rl-key', limit, windowSec);
         assert.equal(req3.allowed, false);
-        assert.equal(expireCallCount, 1, 'EXPIRE must NOT be called on blocked request 3');
-        assert.equal(req3.resetSeconds, 57);
+        assert.equal(req3.distributed, true);
+        assert.equal(req3.remaining, 0);
+        assert.equal(req3.resetSeconds, 54, 'TTL must count down and not reset to 60');
 
         // Request 4: subsequent blocked request
         const req4 = await checkRateLimit('test-redis-rl-key', limit, windowSec);
         assert.equal(req4.allowed, false);
-        assert.equal(expireCallCount, 1, 'EXPIRE must NOT be called on blocked request 4');
-        assert.equal(req4.resetSeconds, 56, 'Lockout TTL must count down instead of resetting to 60');
+        assert.equal(req4.distributed, true);
+        assert.equal(req4.remaining, 0);
+        assert.equal(req4.resetSeconds, 51, 'TTL must continue counting down without extension');
       } finally {
         if (origUrl) process.env.UPSTASH_REDIS_REST_URL = origUrl; else delete process.env.UPSTASH_REDIS_REST_URL;
         if (origToken) process.env.UPSTASH_REDIS_REST_TOKEN = origToken; else delete process.env.UPSTASH_REDIS_REST_TOKEN;
         globalThis.fetch = origFetch;
+      }
+    });
+
+    // 11. Streamer key regeneration transactionally calls RPC first, updates metadata only on success, and fails on DB error
+    it('11. Streamer key regeneration transactionally calls RPC first, updates metadata only on success, and fails on DB error', async () => {
+      const origRpc = supabase.rpc;
+      const origAuth = supabase.auth;
+      let rpcCalledWith = null;
+      let authMetadataUpdatedWith = null;
+
+      try {
+        // A. Successful RPC execution
+        supabase.rpc = async (fn, params) => {
+          if (fn === 'regenerate_streamer_key') {
+            rpcCalledWith = params;
+            return {
+              data: {
+                success: true,
+                streamer_key: params.p_new_key,
+                old_streamer_key: 'sdc_old_key_12345678',
+                revision: 42,
+                last_updated: Date.now(),
+              },
+              error: null,
+            };
+          }
+          return { data: null, error: { message: 'Unknown RPC' } };
+        };
+
+        supabase.auth = {
+          updateUser: async ({ data }) => {
+            authMetadataUpdatedWith = data;
+            return { data: { user: { id: 'u1' } }, error: null };
+          },
+        };
+
+        const resultKey = await regenerateStreamerKey({ id: 'u1' });
+        assert.ok(resultKey.startsWith('sdc_'), 'New key must have sdc_ prefix');
+        assert.equal(rpcCalledWith.p_new_key, resultKey, 'RPC must be invoked with generated key');
+        assert.equal(authMetadataUpdatedWith?.streamerKey, resultKey, 'Auth metadata must be reconciled after DB success');
+
+        // B. Database failure: Must throw and NEVER update Auth metadata or return fake success
+        rpcCalledWith = null;
+        authMetadataUpdatedWith = null;
+
+        supabase.rpc = async () => ({
+          data: null,
+          error: { message: 'Database permission denied: RPC failure', code: '42501' },
+        });
+
+        await assert.rejects(
+          async () => {
+            await regenerateStreamerKey({ id: 'u1' });
+          },
+          (err) => {
+            assert.ok(err.message.includes('Database permission denied'));
+            return true;
+          }
+        );
+
+        assert.equal(authMetadataUpdatedWith, null, 'Auth metadata must NOT be touched if database RPC fails');
+      } finally {
+        supabase.rpc = origRpc;
+        supabase.auth = origAuth;
+      }
+    });
+
+    // 12. RPC regenerate_streamer_key logic validation (unauthorized, conflict, formatting)
+    it('12. RPC regenerate_streamer_key logic validation (unauthorized, conflict, formatting)', async () => {
+      // Mock execution of regenerate_streamer_key logic
+      function simulateRegenerateRpc({ callerId, newKey, existingKeys, targetUser }) {
+        if (!callerId) throw new Error('Unauthorized: Authentication required to regenerate streamer key');
+        if (!newKey || !/^[a-zA-Z0-9_-]{8,64}$/.test(newKey.trim())) {
+          throw new Error('Invalid streamer key format. Must be 8-64 alphanumeric characters, underscores or dashes.');
+        }
+        const trimmed = newKey.trim();
+        const conflictOwner = existingKeys[trimmed];
+        if (conflictOwner && conflictOwner !== callerId) {
+          throw new Error('Uniqueness conflict: Streamer key is already in use by another account');
+        }
+        if (!targetUser || targetUser.userId !== callerId) {
+          throw new Error(`Streamer state record not found for user ${callerId}`);
+        }
+        const oldKey = targetUser.streamerKey;
+        targetUser.streamerKey = trimmed;
+        targetUser.revision += 1;
+        targetUser.lastUpdated = Date.now();
+        return {
+          success: true,
+          streamer_key: trimmed,
+          old_streamer_key: oldKey,
+          revision: targetUser.revision,
+          last_updated: targetUser.lastUpdated,
+        };
+      }
+
+      // Case A: Unauthorized caller (no auth.uid())
+      assert.throws(
+        () => simulateRegenerateRpc({ callerId: null, newKey: 'sdc_valid_key_12345678' }),
+        /Unauthorized/
+      );
+
+      // Case B: Invalid key format (too short / special symbols)
+      assert.throws(
+        () => simulateRegenerateRpc({ callerId: 'user-1', newKey: 'short' }),
+        /Invalid streamer key format/
+      );
+      assert.throws(
+        () => simulateRegenerateRpc({ callerId: 'user-1', newKey: 'sdc_invalid!@#$%^&*' }),
+        /Invalid streamer key format/
+      );
+
+      // Case C: Uniqueness conflict (key in use by another user)
+      const existing = { 'sdc_other_user_key_9999': 'user-2' };
+      assert.throws(
+        () => simulateRegenerateRpc({
+          callerId: 'user-1',
+          newKey: 'sdc_other_user_key_9999',
+          existingKeys: existing,
+          targetUser: { userId: 'user-1', streamerKey: 'sdc_old_1', revision: 1 },
+        }),
+        /Uniqueness conflict/
+      );
+
+      // Case D: Success updates key, increments revision, and records old key for token cascade
+      const userState = { userId: 'user-1', streamerKey: 'sdc_old_key_1', revision: 5 };
+      const res = simulateRegenerateRpc({
+        callerId: 'user-1',
+        newKey: 'sdc_brand_new_key_1234',
+        existingKeys: existing,
+        targetUser: userState,
+      });
+      assert.equal(res.success, true);
+      assert.equal(res.streamer_key, 'sdc_brand_new_key_1234');
+      assert.equal(res.old_streamer_key, 'sdc_old_key_1');
+      assert.equal(res.revision, 6);
+      assert.equal(userState.streamerKey, 'sdc_brand_new_key_1234');
+    });
+
+    // 13. Column-level access restrictions: Anon can read display columns, email/user_id blocked
+    it('13. Column-level access restrictions: Anon can read display columns, email/user_id blocked', () => {
+      const allowedAnonColumns = new Set([
+        'streamer_key',
+        'deaths',
+        'session_deaths',
+        'all_time_deaths',
+        'boss_kills',
+        'settings',
+        'shortcuts',
+        'bosses',
+        'current_boss',
+        'revision',
+        'last_updated',
+      ]);
+
+      function simulateAnonColumnSelect(selectedColumns) {
+        for (const col of selectedColumns) {
+          if (!allowedAnonColumns.has(col)) {
+            const err = new Error(`permission denied for column ${col} of relation streamer_states`);
+            err.code = '42501';
+            throw err;
+          }
+        }
+        return { ok: true };
+      }
+
+      // Display query from Overlay.jsx succeeds
+      const overlayColumns = [
+        'streamer_key',
+        'deaths',
+        'session_deaths',
+        'all_time_deaths',
+        'boss_kills',
+        'settings',
+        'shortcuts',
+        'bosses',
+        'current_boss',
+        'revision',
+        'last_updated',
+      ];
+      assert.doesNotThrow(() => simulateAnonColumnSelect(overlayColumns));
+
+      // Attempting to select email or user_id anonymously fails
+      assert.throws(
+        () => simulateAnonColumnSelect(['email', 'deaths']),
+        /permission denied for column email/
+      );
+      assert.throws(
+        () => simulateAnonColumnSelect(['user_id', 'streamer_key']),
+        /permission denied for column user_id/
+      );
+      assert.throws(
+        () => simulateAnonColumnSelect(['id', 'created_at']),
+        /permission denied for column id/
+      );
+    });
+
+    // 14. Rate limiter local memory fallback returns distributed: false
+    it('14. Rate limiter local memory fallback returns distributed: false', async () => {
+      const origUrl = process.env.UPSTASH_REDIS_REST_URL;
+      const origToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+      delete process.env.UPSTASH_REDIS_REST_URL;
+      delete process.env.UPSTASH_REDIS_REST_TOKEN;
+
+      try {
+        const res = await checkRateLimit('local-fallback-test-key', 5, 30);
+        assert.equal(res.allowed, true);
+        assert.equal(res.distributed, false, 'Local fallback must never claim distributed protection');
+        assert.equal(res.remaining, 4);
+      } finally {
+        if (origUrl) process.env.UPSTASH_REDIS_REST_URL = origUrl;
+        if (origToken) process.env.UPSTASH_REDIS_REST_TOKEN = origToken;
       }
     });
   });

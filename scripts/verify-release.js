@@ -106,6 +106,7 @@ export function verifyReleaseHygiene() {
     'supabase_schema.sql',
     'supabase_migration_v2.sql',
     'supabase_migration_v3_cleanup.sql',
+    'supabase_migration_v4_production.sql',
     '.env.example',
     'README.md',
     'package.json',
@@ -119,33 +120,27 @@ export function verifyReleaseHygiene() {
     }
   }
 
-  // 5. Script Security Check (No Unblock-File or unsafe downloads)
-  function findScripts(dir) {
+  // 5. Shell & Native Scripts Audit: Reject .exe, .dll, .bat, .cmd, and .ps1 anywhere in workspace
+  function findDisallowedFiles(dir) {
     let results = [];
     if (!fs.existsSync(dir)) return results;
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const ent of entries) {
       const full = path.join(dir, ent.name);
       if (ent.isDirectory()) {
-        if (ent.name !== 'node_modules' && ent.name !== '.git') {
-          results = results.concat(findScripts(full));
+        if (ent.name !== 'node_modules' && ent.name !== '.git' && ent.name !== 'release') {
+          results = results.concat(findDisallowedFiles(full));
         }
-      } else if (ent.isFile() && /\.(ps1|bat|cmd)$/i.test(ent.name)) {
+      } else if (ent.isFile() && /\.(exe|dll|bat|cmd|ps1)$/i.test(ent.name)) {
         results.push(full);
       }
     }
     return results;
   }
 
-  const allScripts = findScripts(ROOT_DIR);
-  for (const scriptPath of allScripts) {
-    const content = fs.readFileSync(scriptPath, 'utf8');
-    if (/Unblock-File/i.test(content)) {
-      issues.push(`Unsafe security-bypass command (Unblock-File) found in: ${path.relative(ROOT_DIR, scriptPath)}`);
-    }
-    if (/DownloadFile.*\.exe/i.test(content) && !/verify|hash|checksum/i.test(content)) {
-      issues.push(`Unverified binary download found in: ${path.relative(ROOT_DIR, scriptPath)}`);
-    }
+  const disallowedFiles = findDisallowedFiles(ROOT_DIR);
+  for (const f of disallowedFiles) {
+    issues.push(`Prohibited binary or script file detected in repository: ${path.relative(ROOT_DIR, f)}`);
   }
 
   // Report Findings

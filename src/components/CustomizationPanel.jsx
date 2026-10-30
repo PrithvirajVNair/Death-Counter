@@ -211,7 +211,7 @@ export default function CustomizationPanel({
                     <span>100% Open-Source & Safe (MIT License)</span>
                   </div>
                   <div style={{ color: 'var(--text-muted)', fontSize: '11px' }}>
-                    Sign in with your Streamer Account on the companion app to link your cloud tally and activate in-game hotkeys.
+                    Paste your Streamer Key into the companion app to link your cloud tally and activate in-game hotkeys.
                   </div>
                   <div style={{ display: 'flex', gap: '10px', marginTop: '2px', paddingTop: '6px', borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
                     <a href="/privacy" style={{ color: 'var(--gold)', textDecoration: 'underline', fontSize: '11px' }}>Privacy Policy</a>

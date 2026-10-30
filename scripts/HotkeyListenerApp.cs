@@ -293,6 +293,8 @@ namespace SoulsGameDeathCounter {
         private static string userDisplayName = "";
         private static string userEmail = "";
         private static bool isUserSignedIn = false;
+        private static string cloudAuthToken = "";
+        private static string localPairingKey = "";
 
         public static bool IsAuthenticated {
             get {
@@ -1890,22 +1892,8 @@ namespace SoulsGameDeathCounter {
                         UpdateStatusDisplay(localDeaths, localBossKills);
                         UpdateCountersUI();
 
-                        // Sync to cloud server
-                        ThreadPool.QueueUserWorkItem(delegate {
-                            try {
-                                using (WebClient client = new WebClient()) {
-                                    client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
-                                    client.Headers[HttpRequestHeader.ContentType] = "application/json";
-                                    string endpoint = GetCloudEndpoint("/api/state");
-                                    string payload = string.Format(
-                                        "{{\"type\":\"stateUpdate\",\"deaths\":{0},\"sessionDeaths\":{1},\"allTimeDeaths\":{2},\"bossKills\":{3},\"lastUpdated\":{4},\"key\":\"{5}\"}}",
-                                        localDeaths, localSessionDeaths, localAllTimeDeaths, localBossKills, localLastUpdated, streamerKey ?? ""
-                                    );
-                                    client.UploadString(endpoint, "POST", payload);
-                                }
-                            } catch {}
-                        });
-
+                        // Sync to cloud server via atomic mutation
+                        SendCloudMutation(isDeath ? "setDeath" : "setBossKill", val);
                         LogActivity(string.Format("Manually set {0} to {1} (Saved on PC & live OBS)", isDeath ? "Deaths" : "Boss Slain", val));
                     }
                 }
@@ -1932,21 +1920,7 @@ namespace SoulsGameDeathCounter {
                 UpdateStatusDisplay(localDeaths, localBossKills);
                 UpdateCountersUI();
 
-                ThreadPool.QueueUserWorkItem(delegate {
-                    try {
-                        using (WebClient client = new WebClient()) {
-                            client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
-                            client.Headers[HttpRequestHeader.ContentType] = "application/json";
-                            string endpoint = GetCloudEndpoint("/api/state");
-                            string payload = string.Format(
-                                "{{\"type\":\"stateUpdate\",\"deaths\":0,\"sessionDeaths\":0,\"allTimeDeaths\":{0},\"bossKills\":{1},\"lastUpdated\":{2},\"key\":\"{3}\"}}",
-                                localAllTimeDeaths, localBossKills, localLastUpdated, streamerKey ?? ""
-                            );
-                            client.UploadString(endpoint, "POST", payload);
-                        }
-                    } catch {}
-                });
-
+                SendCloudMutation("resetSession", 0, "session");
                 LogActivity("Deaths reset to 0 (Saved on PC & live OBS)");
             } else {
                 confirmResetDeath = true;
@@ -1991,21 +1965,7 @@ namespace SoulsGameDeathCounter {
                 UpdateStatusDisplay(localDeaths, localBossKills);
                 UpdateCountersUI();
 
-                ThreadPool.QueueUserWorkItem(delegate {
-                    try {
-                        using (WebClient client = new WebClient()) {
-                            client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
-                            client.Headers[HttpRequestHeader.ContentType] = "application/json";
-                            string endpoint = GetCloudEndpoint("/api/state");
-                            string payload = string.Format(
-                                "{{\"type\":\"stateUpdate\",\"deaths\":{0},\"sessionDeaths\":{1},\"allTimeDeaths\":{2},\"bossKills\":0,\"lastUpdated\":{3},\"key\":\"{4}\"}}",
-                                localDeaths, localSessionDeaths, localAllTimeDeaths, localLastUpdated, streamerKey ?? ""
-                            );
-                            client.UploadString(endpoint, "POST", payload);
-                        }
-                    } catch {}
-                });
-
+                SendCloudMutation("setBossKill", 0);
                 LogActivity("Boss Slain count reset to 0 (Saved on PC & live OBS)");
             } else {
                 confirmResetBoss = true;
@@ -2082,31 +2042,147 @@ namespace SoulsGameDeathCounter {
             }
         }
 
+        public static bool IsAllowedOrigin(string originHeader) {
+            if (string.IsNullOrEmpty(originHeader)) return false;
+            if (originHeader == "null") return false;
+
+            Uri originUri;
+            if (!Uri.TryCreate(originHeader, UriKind.Absolute, out originUri)) {
+                return false;
+            }
+
+            string scheme = originUri.Scheme.ToLowerInvariant();
+            string host = originUri.Host.ToLowerInvariant();
+            int port = originUri.Port;
+
+            // Loopback development origins
+            if (scheme == "http") {
+                if ((host == "localhost" || host == "127.0.0.1") && (port == 5173 || port == 3000 || port == 4455 || port == 80)) {
+                    return true;
+                }
+            }
+
+            // Production official web application origin
+            if (scheme == "https") {
+                if (host == "soulgamedc-rosy.vercel.app" && (port == 443 || port == -1)) {
+                    return true;
+                }
+                if (!string.IsNullOrEmpty(serverUrl)) {
+                    Uri sUri;
+                    if (Uri.TryCreate(serverUrl, UriKind.Absolute, out sUri)) {
+                        if (sUri.Scheme.ToLowerInvariant() == scheme && sUri.Host.ToLowerInvariant() == host && (sUri.Port == port || (sUri.Port == -1 && port == 443))) {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsAuthorizedLocalRequest(HttpListenerRequest req, string origin) {
+            string pairingHeader = req.Headers["X-SDC-Pairing-Key"];
+            if (!string.IsNullOrEmpty(localPairingKey) && pairingHeader == localPairingKey) {
+                return true;
+            }
+            if (IsAllowedOrigin(origin)) {
+                return true;
+            }
+            return false;
+        }
+
+        private static void SendCloudMutation(string action, int value = 0, string resetTarget = null) {
+            string cloudKey = !string.IsNullOrEmpty(streamerKey) && streamerKey != "guest" ? streamerKey : "";
+            if (string.IsNullOrEmpty(serverUrl) || string.IsNullOrEmpty(cloudKey)) return;
+
+            ThreadPool.QueueUserWorkItem(delegate {
+                try {
+                    using (WebClient client = new WebClient()) {
+                        client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
+                        client.Headers[HttpRequestHeader.ContentType] = "application/json";
+                        if (!string.IsNullOrEmpty(cloudAuthToken)) {
+                            client.Headers["Authorization"] = "Bearer " + cloudAuthToken;
+                        }
+
+                        string opId = "dt_" + DateTime.UtcNow.Ticks + "_" + Guid.NewGuid().ToString("N").Substring(0, 12);
+                        client.Headers["X-Operation-Id"] = opId;
+
+                        bool isReset = action == "reset" || action == "resetSession" || action == "resetAll";
+                        string endpoint = GetCloudEndpoint(isReset ? "/api/reset" : "/api/action");
+
+                        string payload;
+                        if (isReset) {
+                            string target = resetTarget ?? (action == "resetAll" ? "all" : "session");
+                            payload = string.Format("{{\"type\":\"reset\",\"target\":\"{0}\",\"key\":\"{1}\",\"operationId\":\"{2}\"}}", target, cloudKey, opId);
+                        } else {
+                            payload = string.Format("{{\"action\":\"{0}\",\"value\":{1},\"key\":\"{2}\",\"operationId\":\"{3}\"}}", action, value, cloudKey, opId);
+                        }
+
+                        string responseJson = client.UploadString(endpoint, "POST", payload);
+
+                        Match mD = Regex.Match(responseJson, @"""deaths""\s*:\s*(\d+)");
+                        Match mB = Regex.Match(responseJson, @"""bossKills""\s*:\s*(\d+)");
+                        Match mS = Regex.Match(responseJson, @"""sessionDeaths""\s*:\s*(\d+)");
+                        Match mA = Regex.Match(responseJson, @"""allTimeDeaths""\s*:\s*(\d+)");
+
+                        if (mD.Success && mB.Success) {
+                            int authD = int.Parse(mD.Groups[1].Value);
+                            int authB = int.Parse(mB.Groups[1].Value);
+                            int authS = mS.Success ? int.Parse(mS.Groups[1].Value) : 0;
+                            int authA = mA.Success ? int.Parse(mA.Groups[1].Value) : 0;
+
+                            lock (stateLock) {
+                                localDeaths = authD;
+                                localBossKills = authB;
+                                localSessionDeaths = authS;
+                                localAllTimeDeaths = authA;
+                                localLastUpdated = GetCurrentTimestampMs();
+                                SaveLocalState();
+                            }
+
+                            if (instance != null) {
+                                instance.SafeInvoke(delegate {
+                                    instance.UpdateStatusDisplay(authD, authB);
+                                    instance.UpdateCountersUI();
+                                });
+                            }
+                        }
+                    }
+                } catch (Exception ex) {
+                    if (instance != null) {
+                        instance.SafeInvoke(delegate {
+                            instance.LogActivity("⚠ Cloud sync notice: " + ex.Message);
+                        });
+                    }
+                }
+            });
+        }
+
         private static void HandleLocalHttpRequest(HttpListenerContext context) {
             try {
                 HttpListenerRequest req = context.Request;
                 HttpListenerResponse res = context.Response;
 
-                // Origin validation: only permit localhost or official application origins
                 string origin = req.Headers["Origin"];
-                bool isAllowedOrigin = false;
-                if (string.IsNullOrEmpty(origin)) {
-                    isAllowedOrigin = true;
-                } else {
-                    string lower = origin.ToLowerInvariant();
-                    if (lower.StartsWith("http://localhost:") ||
-                        lower.StartsWith("http://127.0.0.1:") ||
-                        lower == "http://localhost" ||
-                        lower == "http://127.0.0.1" ||
-                        lower.StartsWith("https://soulgamedc-rosy.vercel.app") ||
-                        lower.Contains(".vercel.app")) {
-                        isAllowedOrigin = true;
+
+                if (req.HttpMethod == "OPTIONS") {
+                    if (!IsAllowedOrigin(origin)) {
+                        res.StatusCode = 403;
+                        res.Close();
+                        return;
                     }
+                    res.Headers["Access-Control-Allow-Origin"] = origin;
+                    res.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
+                    res.Headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-SDC-Pairing-Key, X-Requested-With";
+                    res.Headers["Access-Control-Allow-Private-Network"] = "true";
+                    res.StatusCode = 204;
+                    res.Close();
+                    return;
                 }
 
-                if (!isAllowedOrigin) {
+                if (!IsAuthorizedLocalRequest(req, origin)) {
                     res.StatusCode = 403;
-                    byte[] errBytes = System.Text.Encoding.UTF8.GetBytes("{\"error\":\"Forbidden origin\"}");
+                    byte[] errBytes = System.Text.Encoding.UTF8.GetBytes("{\"error\":\"Forbidden: Invalid origin or missing pairing key\"}");
                     res.ContentType = "application/json";
                     res.OutputStream.Write(errBytes, 0, errBytes.Length);
                     res.Close();
@@ -2115,16 +2191,10 @@ namespace SoulsGameDeathCounter {
 
                 res.Headers["Access-Control-Allow-Origin"] = string.IsNullOrEmpty(origin) ? "*" : origin;
                 res.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
-                res.Headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With";
+                res.Headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-SDC-Pairing-Key, X-Requested-With";
                 res.Headers["Access-Control-Allow-Private-Network"] = "true";
                 res.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
                 res.Headers["Pragma"] = "no-cache";
-
-                if (req.HttpMethod == "OPTIONS") {
-                    res.StatusCode = 204;
-                    res.Close();
-                    return;
-                }
 
                 string path = req.Url.AbsolutePath.ToLowerInvariant();
 
@@ -2133,6 +2203,7 @@ namespace SoulsGameDeathCounter {
                     string key = "";
                     string name = "";
                     string email = "";
+                    string token = "";
 
                     if (req.HttpMethod == "POST") {
                         string body = "";
@@ -2142,20 +2213,27 @@ namespace SoulsGameDeathCounter {
                         Match mKey = Regex.Match(body, @"""streamerKey""\s*:\s*""([^""]+)""");
                         Match mName = Regex.Match(body, @"""displayName""\s*:\s*""([^""]+)""");
                         Match mEmail = Regex.Match(body, @"""email""\s*:\s*""([^""]+)""");
+                        Match mToken = Regex.Match(body, @"""(?:authToken|token|accessToken)""\s*:\s*""([^""]+)""");
 
                         if (mKey.Success) key = mKey.Groups[1].Value;
                         if (mName.Success) name = mName.Groups[1].Value;
                         if (mEmail.Success) email = mEmail.Groups[1].Value;
+                        if (mToken.Success) token = mToken.Groups[1].Value;
                     } else if (req.HttpMethod == "GET") {
                         key = req.QueryString["key"] ?? req.QueryString["streamerKey"] ?? "";
                         name = req.QueryString["name"] ?? req.QueryString["displayName"] ?? "";
                         email = req.QueryString["email"] ?? "";
+                        token = req.QueryString["token"] ?? req.QueryString["authToken"] ?? "";
                     }
 
                     if (!string.IsNullOrEmpty(key) && key != "guest") {
                         streamerKey = key;
                         userDisplayName = !string.IsNullOrEmpty(name) ? name : (!string.IsNullOrEmpty(email) ? email : key);
                         userEmail = email ?? "";
+                        if (!string.IsNullOrEmpty(token)) cloudAuthToken = token;
+                        if (string.IsNullOrEmpty(localPairingKey)) {
+                            localPairingKey = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+                        }
                         isUserSignedIn = true;
                         if (instance != null) {
                             instance.SaveConfig();
@@ -2167,8 +2245,8 @@ namespace SoulsGameDeathCounter {
                         }
 
                         string json = string.Format(
-                            "{{\"success\":true,\"authenticated\":true,\"streamerKey\":\"{0}\",\"displayName\":\"{1}\",\"message\":\"Linked to Desktop App successfully\"}}",
-                            streamerKey, userDisplayName
+                            "{{\"success\":true,\"authenticated\":true,\"streamerKey\":\"{0}\",\"displayName\":\"{1}\",\"pairingKey\":\"{2}\",\"message\":\"Linked to Desktop App successfully\"}}",
+                            streamerKey, userDisplayName, localPairingKey
                         );
                         byte[] buffer = System.Text.Encoding.UTF8.GetBytes(json);
                         res.ContentType = "application/json";
@@ -2345,29 +2423,18 @@ namespace SoulsGameDeathCounter {
                     long srvTime = mTime.Success ? long.Parse(mTime.Groups[1].Value) : 0;
 
                     lock (stateLock) {
-                        if (localLastUpdated > srvTime) {
-                            string syncEndpoint = GetCloudEndpoint("/api/state");
-                            string payload = string.Format(
-                                "{{\"type\":\"stateUpdate\",\"deaths\":{0},\"sessionDeaths\":{1},\"allTimeDeaths\":{2},\"bossKills\":{3},\"lastUpdated\":{4},\"key\":\"{5}\"}}",
-                                localDeaths, localSessionDeaths, localAllTimeDeaths, localBossKills, localLastUpdated > 0 ? localLastUpdated : GetCurrentTimestampMs(), streamerKey ?? ""
-                            );
-                            client.UploadString(syncEndpoint, "POST", payload);
-                            return;
-                        }
+                        localDeaths = srvDeaths;
+                        localSessionDeaths = srvSession;
+                        localAllTimeDeaths = srvAllTime;
+                        localBossKills = srvBoss;
+                        localLastUpdated = srvTime > 0 ? srvTime : GetCurrentTimestampMs();
+                        SaveLocalState();
 
-                        if (srvTime > localLastUpdated) {
-                            localDeaths = srvDeaths;
-                            localSessionDeaths = srvSession;
-                            localAllTimeDeaths = srvAllTime;
-                            localBossKills = srvBoss;
-                            localLastUpdated = srvTime;
-                            SaveLocalState();
-
-                            if (instance != null) {
-                                instance.SafeInvoke(delegate {
-                                    instance.UpdateStatusDisplay(localDeaths, localBossKills);
-                                });
-                            }
+                        if (instance != null) {
+                            instance.SafeInvoke(delegate {
+                                instance.UpdateStatusDisplay(localDeaths, localBossKills);
+                                instance.UpdateCountersUI();
+                            });
                         }
                     }
                 }
@@ -2409,6 +2476,7 @@ namespace SoulsGameDeathCounter {
                 } else if (action == "undoBossKill") {
                     if (localBossKills > 0) localBossKills--;
                 }
+
                 localLastUpdated = GetCurrentTimestampMs();
                 SaveLocalState();
 
@@ -2433,24 +2501,8 @@ namespace SoulsGameDeathCounter {
                 });
             }
 
-            // Sync with remote cloud if signed in with Google or a channel/key is set
-            string cloudKey = !string.IsNullOrEmpty(streamerKey) && streamerKey != "guest" ? streamerKey : "";
-            if (!string.IsNullOrEmpty(serverUrl) && (!string.IsNullOrEmpty(cloudKey) || serverUrl.Contains("channel=") || serverUrl.Contains("key="))) {
-                ThreadPool.QueueUserWorkItem(delegate {
-                    try {
-                        using (WebClient client = new WebClient()) {
-                            client.Headers["User-Agent"] = "SoulsDeathCounter/2.0";
-                            client.Headers[HttpRequestHeader.ContentType] = "application/json";
-                            string endpoint = GetCloudEndpoint("/api/action");
-                            string payload = string.Format(
-                                "{{\"action\":\"{0}\",\"deaths\":{1},\"sessionDeaths\":{2},\"allTimeDeaths\":{3},\"bossKills\":{4},\"lastUpdated\":{5},\"key\":\"{6}\"}}",
-                                action, curD, curS, curA, curB, curT, cloudKey
-                            );
-                            client.UploadString(endpoint, "POST", payload);
-                        }
-                    } catch {}
-                });
-            }
+            // Sync with remote cloud atomically via SendCloudMutation
+            SendCloudMutation(action, 0);
         }
 
         // ─── Config Loading & Saving ───
@@ -2489,8 +2541,16 @@ namespace SoulsGameDeathCounter {
                 userDisplayName = mName.Groups[1].Value;
             }
             Match mEmail = Regex.Match(json, @"""userEmail""\s*:\s*""([^""]+)""");
-            if (mEmail.Success) {
-                userEmail = mEmail.Groups[1].Value;
+            Match mToken = Regex.Match(json, @"""cloudAuthToken""\s*:\s*""([^""]+)""");
+            if (mToken.Success) {
+                cloudAuthToken = mToken.Groups[1].Value;
+            }
+            Match mPairing = Regex.Match(json, @"""localPairingKey""\s*:\s*""([^""]+)""");
+            if (mPairing.Success) {
+                localPairingKey = mPairing.Groups[1].Value;
+            }
+            if (string.IsNullOrEmpty(localPairingKey)) {
+                localPairingKey = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
             }
             isUserSignedIn = !string.IsNullOrEmpty(streamerKey) && streamerKey != "guest";
 
@@ -2539,7 +2599,7 @@ namespace SoulsGameDeathCounter {
                     configFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "hotkey-config.json");
                 }
                 string json = string.Format(
-                    "{{\n  \"serverUrl\": \"{0}\",\n  \"addDeath\": \"{1}\",\n  \"undoDeath\": \"{2}\",\n  \"addBossKill\": \"{3}\",\n  \"undoBossKill\": \"{4}\",\n  \"enabled\": {5},\n  \"streamerKey\": \"{6}\",\n  \"userDisplayName\": \"{7}\",\n  \"userEmail\": \"{8}\"\n}}",
+                    "{{\n  \"serverUrl\": \"{0}\",\n  \"addDeath\": \"{1}\",\n  \"undoDeath\": \"{2}\",\n  \"addBossKill\": \"{3}\",\n  \"undoBossKill\": \"{4}\",\n  \"enabled\": {5},\n  \"streamerKey\": \"{6}\",\n  \"userDisplayName\": \"{7}\",\n  \"userEmail\": \"{8}\",\n  \"cloudAuthToken\": \"{9}\",\n  \"localPairingKey\": \"{10}\"\n}}",
                     serverUrl,
                     bindingAdd != null ? bindingAdd.DisplayName : "F8",
                     bindingUndo != null ? bindingUndo.DisplayName : "F7",
@@ -2548,7 +2608,9 @@ namespace SoulsGameDeathCounter {
                     isHotkeysActive ? "true" : "false",
                     streamerKey ?? "",
                     userDisplayName ?? "",
-                    userEmail ?? ""
+                    userEmail ?? "",
+                    cloudAuthToken ?? "",
+                    localPairingKey ?? ""
                 );
                 File.WriteAllText(configFilePath, json);
             } catch {}

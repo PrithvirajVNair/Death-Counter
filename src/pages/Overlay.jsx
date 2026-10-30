@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import DeathCounter from '../components/DeathCounter';
 import { useDeathCounter } from '../hooks/useDeathCounter';
@@ -15,39 +15,74 @@ export default function Overlay() {
   const keyParam = searchParams.get('key') || searchParams.get('streamerKey') || searchParams.get('channel') || searchParams.get('room');
   const effectiveKey = keyParam || auth?.streamerKey;
 
+  const lastRevisionRef = useRef(0);
+  const isFetchingRef = useRef(false);
+  const abortControllerRef = useRef(null);
+
   // Direct Supabase Cloud Connection & Realtime push for OBS Studio
   useEffect(() => {
     if (!effectiveKey || !supabase) return;
 
+    let isMounted = true;
+    let pollInterval = null;
+
+    const applyStateIfNewer = (data) => {
+      if (!data || !isMounted) return;
+      const incomingRev = Number(data.revision ?? 0);
+      if (incomingRev > 0 && incomingRev < lastRevisionRef.current) {
+        return; // Stale revision ignored
+      }
+      lastRevisionRef.current = Math.max(lastRevisionRef.current, incomingRev);
+
+      loadFullState({
+        deaths: data.deaths ?? 0,
+        sessionDeaths: data.session_deaths ?? 0,
+        allTimeDeaths: data.all_time_deaths ?? 0,
+        bossKills: data.boss_kills ?? 0,
+        settings: data.settings || {},
+        shortcuts: data.shortcuts || {},
+        bosses: data.bosses || {},
+        currentBoss: data.current_boss || '',
+        revision: incomingRev || 1,
+        lastUpdated: data.last_updated ?? 0,
+      });
+    };
+
     const loadFromCloud = async () => {
+      // Skip polling if tab/Browser Source is hidden in background
+      if (typeof document !== 'undefined' && document.hidden) return;
+      if (isFetchingRef.current) return;
+
+      isFetchingRef.current = true;
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      abortControllerRef.current = new AbortController();
+
       try {
         const { data, error } = await supabase
           .from('streamer_states')
           .select('streamer_key, deaths, session_deaths, all_time_deaths, boss_kills, settings, shortcuts, bosses, current_boss, revision, last_updated')
           .eq('streamer_key', effectiveKey)
+          .abortSignal(abortControllerRef.current.signal)
           .maybeSingle();
 
-        if (!error && data) {
-          loadFullState({
-            deaths: data.deaths ?? 0,
-            sessionDeaths: data.session_deaths ?? 0,
-            allTimeDeaths: data.all_time_deaths ?? 0,
-            bossKills: data.boss_kills ?? 0,
-            settings: data.settings || {},
-            shortcuts: data.shortcuts || {},
-            bosses: data.bosses || {},
-            currentBoss: data.current_boss || '',
-            revision: data.revision || 1,
-            lastUpdated: data.last_updated ?? 0,
-          });
+        if (!error && data && isMounted) {
+          applyStateIfNewer(data);
         }
-      } catch {}
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          // Silent recovery on network interruption
+        }
+      } finally {
+        isFetchingRef.current = false;
+      }
     };
 
     // 1. Initial immediate load
     loadFromCloud();
 
-    // 2. Realtime listener: instant push from Supabase (under 50ms)
+    // 2. Realtime listener: instant push from Supabase
     const channel = supabase
       .channel(`obs_overlay_${effectiveKey}`)
       .on(
@@ -61,28 +96,27 @@ export default function Overlay() {
         (payload) => {
           const row = payload.new;
           if (row) {
-            loadFullState({
-              deaths: row.deaths ?? 0,
-              sessionDeaths: row.session_deaths ?? 0,
-              allTimeDeaths: row.all_time_deaths ?? 0,
-              bossKills: row.boss_kills ?? 0,
-              settings: row.settings || {},
-              shortcuts: row.shortcuts || {},
-              bosses: row.bosses || {},
-              currentBoss: row.current_boss || '',
-              revision: row.revision || 1,
-              lastUpdated: row.last_updated ?? 0,
-            });
+            applyStateIfNewer(row);
           }
         }
       )
       .subscribe();
 
-    // 3. Fallback polling for OBS Studio CEF every 800ms
-    const interval = setInterval(loadFromCloud, 800);
+    // 3. Fallback recovery polling (runs every 1500ms when visible)
+    pollInterval = setInterval(loadFromCloud, 1500);
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        loadFromCloud();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
-      clearInterval(interval);
+      isMounted = false;
+      if (pollInterval) clearInterval(pollInterval);
+      if (abortControllerRef.current) abortControllerRef.current.abort();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       channel.unsubscribe();
     };
   }, [effectiveKey, loadFullState]);

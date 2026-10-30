@@ -151,15 +151,36 @@ Copy-Item scripts\DeathCounterHotkeys.exe public\DeathCounterHotkeys.exe
 
 ---
 
-## 9. Verification & Quality Checklist
+## 9. Second-Pass Security & Data Integrity Remediation
 
-- [x] Strict Row-Level Security (`auth.uid() = user_id`) enabled.
-- [x] Column privilege isolation for anonymous OBS browser source clients.
-- [x] Monotonic revision tracking and atomic PostgreSQL RPC mutations.
-- [x] Operation idempotency with TTL deduplication.
-- [x] Secure SHA-256 hashed remote moderator tokens.
-- [x] Boss history and appearance customization preserved across all mutations.
-- [x] Per-action debounce in desktop companion keyboard hook.
-- [x] Local desktop HTTP listener protected with Origin validation.
-- [x] 25/25 automated regression tests passing (`npm test`).
-- [x] Clean production build with 0 ESLint errors.
+### Key Architectural Hardening:
+1. **Dual Authorization Paths**:
+   - **Streamer**: Requires valid Supabase Auth Bearer JWT verified server-side. Validates user identity and verifies ownership against `streamer_states.user_id`. Streamer keys alone are strictly rejected with `401 Unauthorized` for mutations.
+   - **Moderator**: Requires a valid moderator token submitted via `X-Moderator-Token` header. Validated server-side via SHA-256 hash against `streamer_remote_tokens`. Enforces expiration, revocation, and fine-grained permissions.
+   - **Public OBS**: Read-only projection strictly excluding sensitive account columns. Mutations are prohibited.
+2. **Unsafe Fallback Elimination**:
+   - Removed all fallback paths in `api/_db.js` that previously executed unprotected direct UPDATEs or fell back to local memory. PostgreSQL `mutate_counter` is the sole mutation authority in production.
+3. **Public Token Access Completely Revoked**:
+   - Database tables `streamer_remote_tokens` and `operation_idempotency` have all `anon` privileges revoked. Plaintext tokens are never stored; only SHA-256 hashes are persisted. Token hashes are never returned over client APIs.
+4. **Transaction-Safe Idempotency**:
+   - `operation_id` is mandatory for all mutations (8–128 alphanumeric chars). Evaluated atomically inside `mutate_counter` using row-level locks (`SELECT ... FOR UPDATE`). Cached results are returned on deduplication, and reusing an ID for a conflicting action is rejected with `409 Conflict`.
+5. **Atomic Desktop Companion Synchronization**:
+   - Desktop companion sends atomic individual mutations (`add`, `undo`, `addBossKill`, `setDeath`, `resetSession`) with unique `operationId`s to `/api/action` and `/api/reset` rather than broadcasting stale absolute counter values that could overwrite newer cloud state.
+6. **Strict Origin & Pairing Validation on Local Companion**:
+   - Enforces exact `Uri` parsing (exact scheme, host, and port). Rejects missing Origin, null Origin, substring/prefix attacks, and arbitrary `.vercel.app` domains. Validates pairing header `X-SDC-Pairing-Key`.
+
+---
+
+## 10. Verification & Quality Checklist
+
+- [x] Strict Supabase Auth Bearer JWT verification on all streamer backend mutations.
+- [x] Streamer key possession alone strictly rejected for counter mutations (`401 Unauthorized`).
+- [x] Unsafe RPC fallback removed; database mutations strictly authoritative.
+- [x] Anonymous access to `streamer_remote_tokens` and `operation_idempotency` completely revoked.
+- [x] Moderator tokens stored only as SHA-256 hashes; hashes never returned to clients.
+- [x] Row-level locking (`SELECT ... FOR UPDATE`) in `mutate_counter` guaranteeing concurrency idempotency.
+- [x] Desktop companion sends atomic mutations with `operationId` rather than absolute state.
+- [x] Desktop companion local HTTP server enforces exact Origin parsing and pairing verification.
+- [x] Overlay polling pauses when tab/source is hidden (`document.hidden`), with request abort cancellation.
+- [x] 42/42 automated security, atomic concurrency, and state preservation tests passing (`npm test`).
+- [x] Clean production build with 0 compiler errors.

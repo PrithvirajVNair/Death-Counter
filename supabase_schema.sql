@@ -1,18 +1,30 @@
 -- ==============================================================================
--- Souls Game Death Counter — Production Database Schema & Security Hardening
--- Run this in your Supabase Dashboard: SQL Editor -> New Query -> Run
+-- Souls Game Death Counter (SDC) — Authoritative PostgreSQL Schema
+-- Features:
+--   - Strict Row Level Security (RLS) enforcing auth.uid() = user_id
+--   - Cryptographically hashed remote tokens (SHA-256) with fine-grained permissions
+--   - Anonymous read restrictions shielding user emails and internal IDs
+--   - Transaction-safe atomic mutations via mutate_counter stored procedure
+--   - Monotonically increasing revision numbers preventing out-of-order race conditions
+--   - Operation-level idempotency scoped to streamer preventing duplicate mutations
 -- ==============================================================================
 
--- Enable pgcrypto for secure cryptographic hashing
+-- 1. Enable required PostgreSQL extensions
+create extension if not exists "uuid-ossp";
 create extension if not exists pgcrypto;
 
--- 1. Create / Update streamer_states table
+-- ==============================================================================
+-- 2. Core Tables
+-- ==============================================================================
+
+-- 2.1 Streamer States Table
 create table if not exists public.streamer_states (
-  user_id uuid primary key references auth.users(id) on delete cascade,
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid references auth.users(id) on delete cascade unique not null,
   email text,
   display_name text,
   avatar_url text,
-  streamer_key text unique not null,
+  streamer_key varchar(64) unique not null,
   deaths integer not null default 0 check (deaths >= 0),
   session_deaths integer not null default 0 check (session_deaths >= 0),
   all_time_deaths integer not null default 0 check (all_time_deaths >= 0),
@@ -22,111 +34,74 @@ create table if not exists public.streamer_states (
   bosses jsonb not null default '{}'::jsonb,
   current_boss text not null default '',
   revision bigint not null default 1,
-  last_updated bigint not null default 0,
+  last_updated bigint not null default (extract(epoch from now()) * 1000)::bigint,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
--- Ensure revision column exists for existing tables
-do $$
-begin
-  if not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'streamer_states' and column_name = 'revision') then
-    alter table public.streamer_states add column revision bigint not null default 1;
-  end if;
-end $$;
+create index if not exists idx_streamer_states_user_id on public.streamer_states(user_id);
+create index if not exists idx_streamer_states_streamer_key on public.streamer_states(streamer_key);
 
--- Indexes for fast queries
-create index if not exists idx_streamer_states_key on public.streamer_states(streamer_key);
-
--- 2. Create / Update streamer_remote_tokens table (for Friend & Moderator Delegation)
+-- 2.2 Remote Moderator Tokens Table (Stores ONLY SHA-256 Hashes)
 create table if not exists public.streamer_remote_tokens (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
-  streamer_key text not null,
-  streamer_name text not null,
-  token text not null,
-  token_hash text,
-  label text not null default 'Friend Access',
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid references auth.users(id) on delete cascade not null,
+  streamer_key varchar(64) not null,
+  streamer_name text,
+  token text, -- Nullable legacy column; active system uses token_hash
+  token_hash varchar(64) unique,
+  label text default 'Friend Access',
+  permissions jsonb not null default '{"can_increment_deaths":true,"can_increment_bosses":true,"can_set_deaths":true,"can_set_bosses":true,"can_reset_session":true,"can_reset_all":false}'::jsonb,
   expires_at timestamptz, -- null means permanent
   is_revoked boolean not null default false,
   created_at timestamptz not null default now()
 );
 
--- Ensure token_hash column exists
-do $$
-begin
-  if not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'streamer_remote_tokens' and column_name = 'token_hash') then
-    alter table public.streamer_remote_tokens add column token_hash text;
-  end if;
-end $$;
-
-create index if not exists idx_streamer_remote_tokens_token on public.streamer_remote_tokens(token);
-create index if not exists idx_streamer_remote_tokens_hash on public.streamer_remote_tokens(token_hash);
 create index if not exists idx_streamer_remote_tokens_user on public.streamer_remote_tokens(user_id);
 create index if not exists idx_streamer_remote_tokens_key on public.streamer_remote_tokens(streamer_key);
+create unique index if not exists idx_streamer_remote_tokens_hash on public.streamer_remote_tokens(token_hash) where token_hash is not null;
 
--- 3. Create operation_idempotency table (Prevents double counting on retries)
+-- 2.3 Operation Idempotency Table (Scoped to streamer, prevents duplicate executions)
 create table if not exists public.operation_idempotency (
-  operation_id text primary key,
-  streamer_key text not null,
-  action text not null,
-  created_at timestamptz not null default now()
+  streamer_key varchar(64) not null,
+  operation_id varchar(128) not null,
+  action_name varchar(64) not null,
+  result_state jsonb not null,
+  created_at timestamptz not null default timezone('utc', now()),
+  primary key (streamer_key, operation_id)
 );
 
-create index if not exists idx_operation_idempotency_streamer on public.operation_idempotency(streamer_key);
 create index if not exists idx_operation_idempotency_created on public.operation_idempotency(created_at);
 
--- 4. Enable Row Level Security (RLS)
+-- ==============================================================================
+-- 3. Row-Level Security (RLS) Configuration
+-- ==============================================================================
+
 alter table public.streamer_states enable row level security;
 alter table public.streamer_remote_tokens enable row level security;
 alter table public.operation_idempotency enable row level security;
 
--- ==============================================================================
--- 5. RLS Policies: streamer_states
--- ==============================================================================
-
--- Drop old unsafe policies
+-- 3.1 streamer_states policies
+drop policy if exists "Streamers own records" on public.streamer_states;
 drop policy if exists "Streamers can update own state" on public.streamer_states;
 drop policy if exists "Streamers can insert own state" on public.streamer_states;
-drop policy if exists "Anyone can read streamer state" on public.streamer_states;
 drop policy if exists "Streamers can read own state" on public.streamer_states;
-drop policy if exists "Public overlay read" on public.streamer_states;
 drop policy if exists "Streamers can delete own state" on public.streamer_states;
+drop policy if exists "Public overlay read" on public.streamer_states;
 
--- Insert: Only authenticated users for their own user_id
-create policy "Streamers can insert own state"
+create policy "Streamers own records"
   on public.streamer_states
-  for insert
-  with check (auth.uid() = user_id);
-
--- Update: Streamers can ONLY update their own state
-create policy "Streamers can update own state"
-  on public.streamer_states
-  for update
+  for all
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
--- Delete: Streamers can only delete their own state
-create policy "Streamers can delete own state"
-  on public.streamer_states
-  for delete
-  using (auth.uid() = user_id);
-
--- Select: Authenticated users can view their own record
-create policy "Streamers can read own state"
-  on public.streamer_states
-  for select
-  to authenticated
-  using (auth.uid() = user_id);
-
--- Select: Anonymous users can select overlay states for rendering OBS overlays
 create policy "Public overlay read"
   on public.streamer_states
   for select
   to anon
   using (true);
 
--- Explicit Column Privileges for Anonymous Users (Protects Email & User ID)
+-- Shield email and user_id from anonymous scraping
 revoke all on public.streamer_states from anon;
 grant select (
   streamer_key,
@@ -145,53 +120,37 @@ grant select (
 ) on public.streamer_states to anon;
 grant all on public.streamer_states to authenticated, service_role;
 
--- ==============================================================================
--- 6. RLS Policies: streamer_remote_tokens
--- ==============================================================================
+-- 3.2 streamer_remote_tokens policies
+drop policy if exists "Streamers manage own tokens" on public.streamer_remote_tokens;
 drop policy if exists "Streamers can manage own remote tokens" on public.streamer_remote_tokens;
 drop policy if exists "Public token lookup" on public.streamer_remote_tokens;
 
-create policy "Streamers can manage own remote tokens"
+create policy "Streamers manage own tokens"
   on public.streamer_remote_tokens
   for all
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
-create policy "Public token lookup"
-  on public.streamer_remote_tokens
-  for select
-  to anon, authenticated
-  using (not is_revoked and (expires_at is null or expires_at > now()));
+-- STRICT: Revoke all anon access from remote tokens table
+revoke all on public.streamer_remote_tokens from anon;
+-- Streamers cannot select token_hash or raw token
+revoke select (token, token_hash) on public.streamer_remote_tokens from authenticated;
+grant select (id, user_id, streamer_key, streamer_name, label, permissions, expires_at, is_revoked, created_at)
+  on public.streamer_remote_tokens to authenticated;
+grant all on public.streamer_remote_tokens to service_role;
 
-grant all on public.streamer_remote_tokens to authenticated, service_role;
-grant select (
-  id,
-  streamer_key,
-  streamer_name,
-  token,
-  token_hash,
-  label,
-  expires_at,
-  is_revoked,
-  created_at
-) on public.streamer_remote_tokens to anon;
+-- 3.3 operation_idempotency policies
+drop policy if exists "Service role only idempotency" on public.operation_idempotency;
+drop policy if exists "Service role and authenticated can manage idempotency" on public.operation_idempotency;
+
+-- Completely isolate idempotency table: no client access
+revoke all on public.operation_idempotency from anon, authenticated;
+grant all on public.operation_idempotency to service_role;
 
 -- ==============================================================================
--- 7. RLS Policies: operation_idempotency
--- ==============================================================================
-create policy "Service role and authenticated can manage idempotency"
-  on public.operation_idempotency
-  for all
-  using (true)
-  with check (true);
-
-grant all on public.operation_idempotency to authenticated, service_role;
-
--- ==============================================================================
--- 8. Triggers
+-- 4. Triggers
 -- ==============================================================================
 
--- Automatically update updated_at timestamp
 create or replace function public.handle_updated_at()
 returns trigger as $$
 begin
@@ -206,7 +165,6 @@ create trigger set_timestamp
   for each row
   execute procedure public.handle_updated_at();
 
--- Prevent altering user_id on existing record
 create or replace function public.prevent_user_id_tamper()
 returns trigger as $$
 begin
@@ -224,8 +182,55 @@ create trigger check_user_id_tamper
   execute procedure public.prevent_user_id_tamper();
 
 -- ==============================================================================
--- 9. Atomic Counter Mutation RPC (Transaction-Safe, Prevents Lost Updates)
+-- 5. Stored Procedures & RPCs
 -- ==============================================================================
+
+-- 5.1 Secure Token Validation (Returns metadata without exposing hashes)
+create or replace function public.validate_remote_token(p_token_hash text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_row record;
+begin
+  if p_token_hash is null or length(p_token_hash) <> 64 then
+    return jsonb_build_object('valid', false, 'reason', 'invalid_format');
+  end if;
+
+  select id, streamer_key, streamer_name, label, permissions, expires_at, is_revoked
+  into v_row
+  from public.streamer_remote_tokens
+  where token_hash = p_token_hash;
+
+  if not found then
+    return jsonb_build_object('valid', false, 'reason', 'not_found');
+  end if;
+
+  if v_row.is_revoked then
+    return jsonb_build_object('valid', false, 'reason', 'revoked', 'streamerName', v_row.streamer_name);
+  end if;
+
+  if v_row.expires_at is not null and v_row.expires_at <= now() then
+    return jsonb_build_object('valid', false, 'reason', 'expired', 'streamerName', v_row.streamer_name, 'expiresAt', v_row.expires_at);
+  end if;
+
+  return jsonb_build_object(
+    'valid', true,
+    'streamerKey', v_row.streamer_key,
+    'streamerName', coalesce(v_row.streamer_name, 'Streamer'),
+    'label', coalesce(v_row.label, 'Friend Access'),
+    'permissions', coalesce(v_row.permissions, '{"can_increment_deaths":true,"can_increment_bosses":true,"can_set_deaths":true,"can_set_bosses":true,"can_reset_session":true,"can_reset_all":false}'::jsonb),
+    'expiresAt', v_row.expires_at
+  );
+end;
+$$;
+
+revoke all on function public.validate_remote_token(text) from public;
+grant execute on function public.validate_remote_token(text) to anon, authenticated, service_role;
+
+-- 5.2 Atomic and Idempotent Mutation RPC: mutate_counter
 create or replace function public.mutate_counter(
   p_streamer_key text,
   p_action text,
@@ -236,7 +241,7 @@ create or replace function public.mutate_counter(
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 declare
   v_user_id uuid;
@@ -246,11 +251,19 @@ declare
   v_token_record public.streamer_remote_tokens%rowtype;
   v_is_authorized boolean := false;
   v_token_hash text;
+  v_cached_result jsonb;
+  v_cached_action text;
+  v_result jsonb;
+  v_perms jsonb;
 begin
   v_now_ms := (extract(epoch from clock_timestamp()) * 1000)::bigint;
 
+  -- Validate operation ID
+  if p_operation_id is null or length(trim(p_operation_id)) < 8 or length(p_operation_id) > 128 or p_operation_id !~ '^[a-zA-Z0-9_-]+$' then
+    raise exception 'Invalid or missing operation_id (must be 8-128 alphanumeric characters)';
+  end if;
+
   -- 1. Authorization Verification
-  -- A. Authenticated Streamer Owner check
   if auth.uid() is not null then
     select user_id into v_user_id
     from public.streamer_states
@@ -261,53 +274,50 @@ begin
     end if;
   end if;
 
-  -- B. Moderator Token check (if not authorized as owner)
   if not v_is_authorized and p_token is not null and p_token <> '' then
-    v_token_hash := encode(digest(p_token, 'sha256'), 'hex');
+    v_token_hash := case when length(p_token) = 64 and p_token ~ '^[a-fA-F0-9]{64}$'
+                         then lower(p_token)
+                         else encode(digest(p_token, 'sha256'), 'hex') end;
 
     select * into v_token_record
     from public.streamer_remote_tokens
     where streamer_key = p_streamer_key
-      and (token = p_token or token_hash = v_token_hash or token = v_token_hash)
+      and token_hash = v_token_hash
       and not is_revoked
       and (expires_at is null or expires_at > now())
     limit 1;
 
     if v_token_record.id is not null then
       v_is_authorized := true;
+      v_perms := coalesce(v_token_record.permissions, '{"can_increment_deaths":true,"can_increment_bosses":true,"can_set_deaths":true,"can_set_bosses":true,"can_reset_session":true,"can_reset_all":false}'::jsonb);
+
+      -- Enforce fine-grained permissions for moderators
+      if p_action in ('add', 'addDeath', 'undo', 'undoDeath') and not coalesce((v_perms->>'can_increment_deaths')::boolean, true) then
+        raise exception 'Permission denied: Token cannot modify deaths';
+      elsif p_action in ('addBossKill', 'bossSlain', 'undoBossKill') and not coalesce((v_perms->>'can_increment_bosses')::boolean, true) then
+        raise exception 'Permission denied: Token cannot modify boss kills';
+      elsif p_action in ('setDeath', 'setCount') and not coalesce((v_perms->>'can_set_deaths')::boolean, true) then
+        raise exception 'Permission denied: Token cannot set exact death count';
+      elsif p_action in ('setBossKill', 'setBossCount') and not coalesce((v_perms->>'can_set_bosses')::boolean, true) then
+        raise exception 'Permission denied: Token cannot set exact boss count';
+      elsif p_action in ('resetSession', 'reset') and not coalesce((v_perms->>'can_reset_session')::boolean, true) then
+        raise exception 'Permission denied: Token cannot reset session deaths';
+      elsif p_action in ('resetAll') and not coalesce((v_perms->>'can_reset_all')::boolean, false) then
+        raise exception 'Permission denied: Token cannot reset all-time statistics';
+      end if;
     end if;
+  end if;
+
+  -- Service role can execute directly without JWT/token if invoked from trusted backend
+  if not v_is_authorized and current_user = 'service_role' then
+    v_is_authorized := true;
   end if;
 
   if not v_is_authorized then
     raise exception 'Unauthorized counter mutation';
   end if;
 
-  -- 2. Idempotency Check (Prevents duplicate counting on network retries)
-  if p_operation_id is not null and p_operation_id <> '' then
-    if exists (
-      select 1 from public.operation_idempotency
-      where operation_id = p_operation_id and streamer_key = p_streamer_key
-    ) then
-      select * into v_state from public.streamer_states where streamer_key = p_streamer_key;
-      return jsonb_build_object(
-        'success', true,
-        'deduped', true,
-        'action', p_action,
-        'deaths', v_state.deaths,
-        'sessionDeaths', v_state.session_deaths,
-        'allTimeDeaths', v_state.all_time_deaths,
-        'bossKills', v_state.boss_kills,
-        'revision', v_state.revision,
-        'lastUpdated', v_state.last_updated
-      );
-    end if;
-
-    insert into public.operation_idempotency (operation_id, streamer_key, action)
-    values (p_operation_id, p_streamer_key, p_action)
-    on conflict (operation_id) do nothing;
-  end if;
-
-  -- 3. Lock and retrieve current streamer state row (FOR UPDATE prevents race conditions)
+  -- 2. Lock the streamer state row first to strictly serialize concurrent mutations
   select * into v_state
   from public.streamer_states
   where streamer_key = p_streamer_key
@@ -315,6 +325,18 @@ begin
 
   if v_state.user_id is null then
     raise exception 'Streamer state not found';
+  end if;
+
+  -- 3. Idempotency Check (Thread-safe inside row lock)
+  select result_state, action_name into v_cached_result, v_cached_action
+  from public.operation_idempotency
+  where streamer_key = p_streamer_key and operation_id = p_operation_id;
+
+  if v_cached_result is not null then
+    if v_cached_action <> p_action then
+      raise exception 'Operation ID reuse with conflicting action';
+    end if;
+    return v_cached_result || jsonb_build_object('deduped', true);
   end if;
 
   -- 4. Apply Atomic Mutations
@@ -348,10 +370,10 @@ begin
     raise exception 'Invalid counter action: %', p_action;
   end if;
 
-  -- Increment authoritative revision and update timestamp
   v_state.revision := coalesce(v_state.revision, 0) + 1;
   v_state.last_updated := v_now_ms;
 
+  -- Update streamer_states
   update public.streamer_states
   set deaths = v_state.deaths,
       session_deaths = v_state.session_deaths,
@@ -362,8 +384,9 @@ begin
       updated_at = now()
   where streamer_key = p_streamer_key;
 
-  return jsonb_build_object(
+  v_result := jsonb_build_object(
     'success', true,
+    'deduped', false,
     'action', p_action,
     'deaths', v_state.deaths,
     'sessionDeaths', v_state.session_deaths,
@@ -372,17 +395,25 @@ begin
     'revision', v_state.revision,
     'lastUpdated', v_state.last_updated
   );
+
+  -- Store in idempotency table
+  insert into public.operation_idempotency (streamer_key, operation_id, action_name, result_state)
+  values (p_streamer_key, p_operation_id, p_action, v_result)
+  on conflict (streamer_key, operation_id) do nothing;
+
+  return v_result;
 end;
 $$;
 
--- ==============================================================================
--- 10. Public Overlay Projection Function
--- ==============================================================================
+revoke all on function public.mutate_counter(text, text, integer, text, text) from public;
+grant execute on function public.mutate_counter(text, text, integer, text, text) to authenticated, service_role;
+
+-- 5.3 Public Overlay Projection Helper
 create or replace function public.get_public_overlay_state(p_streamer_key text)
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, pg_temp
 as $$
 declare
   v_row record;
@@ -411,27 +442,5 @@ begin
 end;
 $$;
 
--- Clean up idempotency keys older than 24 hours
-create or replace function public.cleanup_expired_idempotency_keys()
-returns void
-language sql
-security definer
-as $$
-  delete from public.operation_idempotency
-  where created_at < now() - interval '24 hours';
-$$;
-
--- ==============================================================================
--- 11. Realtime Publication
--- ==============================================================================
-do $$
-begin
-  if not exists (
-    select 1 from pg_publication_tables
-    where pubname = 'supabase_realtime'
-      and schemaname = 'public'
-      and tablename = 'streamer_states'
-  ) then
-    alter publication supabase_realtime add table public.streamer_states;
-  end if;
-end $$;
+revoke all on function public.get_public_overlay_state(text) from public;
+grant execute on function public.get_public_overlay_state(text) to anon, authenticated, service_role;

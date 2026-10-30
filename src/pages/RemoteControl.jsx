@@ -182,11 +182,17 @@ export default function RemoteControl() {
     try {
       const isResetAction = action === 'reset' || action === 'resetSession' || action === 'resetAll';
       const endpoint = isResetAction ? `/api/reset` : `/api/action`;
-      const operationId = `rmt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const randSuffix = typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID().replace(/-/g, '').slice(0, 16)
+        : Math.random().toString(36).slice(2, 12);
+      const operationId = `rmt_${Date.now()}_${randSuffix}`;
 
       const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Moderator-Token': token,
+        },
         body: JSON.stringify({
           action,
           key: streamerKey,
@@ -207,9 +213,22 @@ export default function RemoteControl() {
         if (data.sessionDeaths !== undefined) setSessionDeaths(data.sessionDeaths);
         if (data.allTimeDeaths !== undefined) setAllTimeDeaths(data.allTimeDeaths);
         if (data.bossKills !== undefined) setBossKills(data.bossKills);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        if (res.status === 403) {
+          showToast(`Forbidden: ${errData.error?.message || 'Action not permitted'}`);
+        } else if (res.status === 401) {
+          showToast('Token expired or revoked by streamer!');
+        } else {
+          showToast(errData.error?.message || 'Action failed to reach cloud');
+        }
+        // Rollback local display on authorization or mutation error
+        fetchState();
       }
     } catch (err) {
       console.warn('Remote action dispatch failed:', err);
+      showToast('Network error: Action could not be synced');
+      fetchState();
     }
   };
 

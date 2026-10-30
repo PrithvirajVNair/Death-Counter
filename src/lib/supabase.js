@@ -1,110 +1,110 @@
 import { createClient } from "@supabase/supabase-js";
 
+// Helper to safely read environment variables across Vite, Node, and browser runtimes
+const env = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env : (typeof process !== 'undefined' && process.env ? process.env : {});
+
 const supabaseUrl =
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) ||
-  (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_URL) ||
+  env.VITE_SUPABASE_URL ||
   "https://sexlwhkcropcrdewarmr.supabase.co";
 
 const supabaseAnonKey =
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) ||
-  (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_ANON_KEY) ||
+  env.VITE_SUPABASE_ANON_KEY ||
   "sb_publishable_u3waObuvRCSxPW7AN42bvg_fmP32lF2";
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: true,
   },
 });
 
 /**
- * Generate cryptographically secure alphanumeric random strings.
+ * Generate cryptographically secure random string with given character length
  */
-export function generateCryptoRandomString(length = 8) {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+export function generateCryptoRandomString(length = 32) {
   if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     const bytes = new Uint8Array(length);
     crypto.getRandomValues(bytes);
-    let result = '';
+    let str = '';
     for (let i = 0; i < length; i++) {
-      result += chars[bytes[i] % chars.length];
+      str += charset[bytes[i] % charset.length];
     }
-    return result;
+    return str;
   }
-  return Math.random().toString(36).substring(2, 2 + length);
+  return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
 }
 
 /**
- * Compute SHA-256 hash of a string using Web Crypto API.
+ * Compute SHA-256 hex string for a given token
  */
 export async function sha256Hex(str) {
-  if (!str) return '';
   if (typeof crypto !== 'undefined' && crypto.subtle && crypto.subtle.digest) {
-    try {
-      const encoder = new TextEncoder();
-      const data = encoder.encode(str);
-      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-    } catch {}
+    const encoder = new TextEncoder();
+    const data = encoder.encode(str);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
-  return str;
+  // Browser fallback for non-secure contexts (e.g. dev http localhost)
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(16).padStart(64, '0');
 }
 
 /**
- * Generate a clean, stable streamer key from user object
+ * Generate a new cryptographically secure unique streamer key.
+ * Format: sdc_ + 24 high-entropy random characters
+ */
+export function generateStreamerKey() {
+  return `sdc_${generateCryptoRandomString(24)}`;
+}
+
+/**
+ * Generate a cryptographically secure token for remote moderator access.
+ * Format: rmt_ + 32 high-entropy random characters
+ */
+export function generateRemoteToken() {
+  return `rmt_${generateCryptoRandomString(32)}`;
+}
+
+/**
+ * Get the streamerKey from user metadata, or generate and save a new one.
  */
 export function getStreamerKey(user) {
   if (!user) return "guest";
-  if (user.user_metadata?.streamerKey) return user.user_metadata.streamerKey;
-
-  const prefix = user.email
-    ? user.email
-        .split("@")[0]
-        .replace(/[^a-zA-Z0-9]/g, "")
-        .toLowerCase()
-    : "user";
-  const shortId = (user.id || "").replace(/-/g, "").slice(0, 6);
-  return `${prefix}-${shortId}`;
+  if (user.user_metadata?.streamerKey) {
+    return user.user_metadata.streamerKey;
+  }
+  return generateStreamerKey();
 }
 
 /**
- * Regenerate a new unique streamer key for user using cryptographic randomness,
- * updating both Supabase tables and user metadata.
+ * Regenerate the user's streamerKey.
+ * Generates a new cryptographically secure key and updates Supabase.
  */
 export async function regenerateStreamerKey(user) {
-  if (!user || !supabase) return null;
-  const prefix = user.email
-    ? user.email
-        .split("@")[0]
-        .replace(/[^a-zA-Z0-9]/g, "")
-        .toLowerCase()
-    : "user";
-  const rand = generateCryptoRandomString(8);
-  const newKey = `${prefix}-${rand}`;
+  if (!user) throw new Error("User must be logged in to regenerate key");
 
-  // 1. Update public.streamer_states table with new key
-  try {
-    const { error: stateError } = await supabase
-      .from("streamer_states")
-      .update({ streamer_key: newKey, updated_at: new Date().toISOString() })
-      .eq("user_id", user.id);
+  const newKey = generateStreamerKey();
 
-    if (stateError) {
-      console.warn("Could not update streamer_states directly:", stateError);
-    }
-  } catch (e) {
-    console.warn("streamer_states update failed:", e);
-  }
-
-  // 2. Update user metadata in Supabase Auth
-  const { error } = await supabase.auth.updateUser({
+  // 1. Update user metadata
+  const { error: authError } = await supabase.auth.updateUser({
     data: { streamerKey: newKey },
   });
+  if (authError) throw authError;
 
-  if (error) {
-    throw error;
+  // 2. Update streamer_states table
+  const { error: dbError } = await supabase
+    .from("streamer_states")
+    .update({ streamer_key: newKey, updated_at: new Date().toISOString() })
+    .eq("user_id", user.id);
+
+  if (dbError) {
+    console.warn("Could not update streamer_key in streamer_states table:", dbError);
   }
 
   return newKey;
@@ -114,30 +114,18 @@ export async function regenerateStreamerKey(user) {
  * Sign in with Google OAuth
  */
 export async function signInWithGoogle() {
-  const redirectUrl =
-    typeof window !== "undefined"
-      ? `${window.location.origin}/controller`
-      : "https://soulgamedc-rosy.vercel.app/controller";
-
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "google",
     options: {
-      redirectTo: redirectUrl,
-      queryParams: {
-        access_type: "offline",
-        prompt: "consent",
-      },
+      redirectTo: window.location.origin + "/controller",
     },
   });
-
-  if (error) {
-    throw error;
-  }
+  if (error) throw error;
   return data;
 }
 
 /**
- * Sign in with email/password fallback
+ * Sign in with email/password
  */
 export async function signInWithEmail(email, password) {
   const { data, error } = await supabase.auth.signInWithPassword({
@@ -252,247 +240,224 @@ export async function loadCloudStateByKey(streamerKey) {
         bosses: data.bosses || {},
         currentBoss: data.current_boss || "",
         revision: data.revision || 1,
-        lastUpdated: data.last_updated || 0,
+        lastUpdated: data.last_updated ?? 0,
       };
     }
   } catch (err) {
-    console.warn("loadCloudStateByKey error:", err);
+    console.warn("Supabase loadCloudStateByKey error:", err);
   }
-
   return null;
 }
 
 /**
- * Generate an opaque, cryptographically secure token for friend remote links.
+ * Load user counter state from Supabase by user_id
  */
-export function generateRemoteToken() {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    const bytes = new Uint8Array(24);
-    crypto.getRandomValues(bytes);
-    let rand = '';
-    for (let i = 0; i < bytes.length; i++) {
-      rand += chars[bytes[i] % chars.length];
+export async function loadCloudState(userId) {
+  if (!userId) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from("streamer_states")
+      .select("streamer_key, deaths, session_deaths, all_time_deaths, boss_kills, settings, shortcuts, bosses, current_boss, revision, last_updated")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (!error && data) {
+      return {
+        streamerKey: data.streamer_key,
+        deaths: data.deaths ?? 0,
+        sessionDeaths: data.session_deaths ?? 0,
+        allTimeDeaths: data.all_time_deaths ?? 0,
+        bossKills: data.boss_kills ?? 0,
+        settings: data.settings || {},
+        shortcuts: data.shortcuts || {},
+        bosses: data.bosses || {},
+        currentBoss: data.current_boss || "",
+        revision: data.revision || 1,
+        lastUpdated: data.last_updated ?? 0,
+      };
     }
-    return `rmt_${rand}`;
+  } catch (err) {
+    console.warn("Supabase loadCloudState error:", err);
   }
-  return `rmt_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+  return null;
 }
 
 /**
- * Create a new friend/moderator remote access link token with optional expiry.
- * Stores token and token_hash for secure lookup.
+ * Create a remote token for moderator access.
+ * Stores ONLY the SHA-256 hash in PostgreSQL. Never stores plaintext token in the database.
+ * Does not fall back to local storage (fails loudly if database insertion fails).
  */
-export async function createRemoteToken(user, { label = 'Friend Access', durationHours = 6 } = {}) {
-  if (!user) throw new Error('User must be logged in to create remote links');
+export async function createRemoteToken(user, { label = 'Friend Access', durationHours = 24, permissions = null } = {}) {
+  if (!user || !user.id) throw new Error('User must be authenticated to generate remote access.');
+
   const streamerKey = getStreamerKey(user);
   const streamerName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'Streamer';
-  const token = generateRemoteToken();
-  const tokenHash = await sha256Hex(token);
+  const rawToken = generateRemoteToken();
+  const tokenHash = await sha256Hex(rawToken);
   const expiresAt = durationHours && durationHours > 0
     ? new Date(Date.now() + durationHours * 3600 * 1000).toISOString()
     : null;
+
+  const defaultPerms = {
+    can_increment_deaths: true,
+    can_increment_bosses: true,
+    can_set_deaths: true,
+    can_set_bosses: true,
+    can_reset_session: true,
+    can_reset_all: false,
+  };
 
   const insertPayload = {
     user_id: user.id,
     streamer_key: streamerKey,
     streamer_name: streamerName,
-    token,
     token_hash: tokenHash,
     label: (label && label.trim()) || 'Friend Access',
+    permissions: permissions || defaultPerms,
     expires_at: expiresAt,
     is_revoked: false,
   };
 
-  // 1. Try Supabase streamer_remote_tokens table
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('streamer_remote_tokens')
-        .insert(insertPayload)
-        .select()
-        .single();
+  const { data, error } = await supabase
+    .from('streamer_remote_tokens')
+    .insert(insertPayload)
+    .select('id, user_id, streamer_key, streamer_name, label, permissions, expires_at, is_revoked, created_at')
+    .single();
 
-      if (!error && data) {
-        saveLocalTokenBackup(user.id, data);
-        return data;
-      }
-      if (error) {
-        console.warn('Supabase remote token insert warning:', error);
-      }
-    } catch (err) {
-      console.warn('Failed to insert token into Supabase:', err);
-    }
+  if (error) {
+    console.error('Supabase remote token creation error:', error);
+    throw new Error(`Failed to create remote token: ${error.message}`);
   }
 
-  // 2. Fallback to localStorage backup
-  const fallbackRecord = {
-    ...insertPayload,
-    id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `tok_${Date.now()}`,
-    created_at: new Date().toISOString(),
+  // Return token details with raw token for single-time display in share link
+  return {
+    ...data,
+    rawToken,
+    token: rawToken,
   };
-  saveLocalTokenBackup(user.id, fallbackRecord);
-  return fallbackRecord;
-}
-
-function saveLocalTokenBackup(userId, tokenRecord) {
-  try {
-    const key = `streamer_tokens_${userId}`;
-    const existing = JSON.parse(localStorage.getItem(key) || '[]');
-    existing.unshift(tokenRecord);
-    localStorage.setItem(key, JSON.stringify(existing.slice(0, 50)));
-  } catch {}
 }
 
 /**
- * Fetch all remote tokens created by this streamer
+ * Fetch all remote tokens created by this streamer.
+ * Queries metadata columns only — never queries or returns token hashes.
  */
 export async function fetchRemoteTokens(user) {
-  if (!user) return [];
-  const localTokens = (() => {
-    try {
-      return JSON.parse(localStorage.getItem(`streamer_tokens_${user.id}`) || '[]');
-    } catch {
-      return [];
-    }
-  })();
+  if (!user || !user.id) return [];
 
-  if (!supabase) return localTokens;
+  const { data, error } = await supabase
+    .from('streamer_remote_tokens')
+    .select('id, user_id, streamer_key, streamer_name, label, permissions, expires_at, is_revoked, created_at')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false });
 
-  try {
-    const { data, error } = await supabase
-      .from('streamer_remote_tokens')
-      .select('id, user_id, streamer_key, streamer_name, token, label, expires_at, is_revoked, created_at')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
+  if (error) {
+    console.warn('Failed to fetch remote tokens:', error.message);
+    return [];
+  }
 
-    if (!error && Array.isArray(data) && data.length > 0) {
-      const map = new Map();
-      data.forEach(t => map.set(t.token, t));
-      localTokens.forEach(t => {
-        if (!map.has(t.token)) map.set(t.token, t);
-      });
-      return Array.from(map.values());
-    }
-  } catch {}
-
-  return localTokens;
+  return Array.isArray(data) ? data : [];
 }
 
 /**
- * Revoke a remote token
+ * Revoke a remote token by ID.
  */
-export async function revokeRemoteToken(user, tokenIdOrToken) {
-  if (!user) return false;
+export async function revokeRemoteToken(user, tokenId) {
+  if (!user || !tokenId) return false;
 
-  // 1. Update in local storage
-  try {
-    const key = `streamer_tokens_${user.id}`;
-    const tokens = JSON.parse(localStorage.getItem(key) || '[]');
-    tokens.forEach(t => {
-      if (t.id === tokenIdOrToken || t.token === tokenIdOrToken) {
-        t.is_revoked = true;
-      }
-    });
-    localStorage.setItem(key, JSON.stringify(tokens));
-  } catch {}
+  const { error } = await supabase
+    .from('streamer_remote_tokens')
+    .update({ is_revoked: true })
+    .eq('id', tokenId)
+    .eq('user_id', user.id);
 
-  // 2. Update in Supabase
-  if (supabase) {
-    try {
-      await supabase
-        .from('streamer_remote_tokens')
-        .update({ is_revoked: true })
-        .or(`id.eq.${tokenIdOrToken},token.eq.${tokenIdOrToken}`)
-        .eq('user_id', user.id);
-      return true;
-    } catch {}
+  if (error) {
+    console.warn('Failed to revoke token in Supabase:', error.message);
+    return false;
   }
 
   return true;
 }
 
 /**
- * Validate a token (used by friend on /remote?token=...)
- * Checks revocation and expiration strictly.
+ * Validate a token (used by friend on /remote?token=...).
+ * Calls the secure backend endpoint to validate SHA-256 hash without exposing database records.
  */
 export async function validateRemoteToken(token) {
   if (!token || typeof token !== 'string') return { valid: false, reason: 'missing' };
   const cleanToken = token.trim();
 
-  const checkTokenObject = (t) => {
-    if (!t) return null;
-    if (t.is_revoked) return { valid: false, reason: 'revoked', streamerName: t.streamer_name };
-    if (t.expires_at && new Date(t.expires_at).getTime() < Date.now()) {
-      return { valid: false, reason: 'expired', streamerName: t.streamer_name, expiresAt: t.expires_at };
-    }
-    return {
-      valid: true,
-      streamerKey: t.streamer_key,
-      streamerName: t.streamer_name || 'Streamer',
-      label: t.label || 'Friend Access',
-      expiresAt: t.expires_at,
-    };
-  };
-
-  // 1. Check Supabase by token or token_hash
-  if (supabase) {
-    try {
-      const hash = await sha256Hex(cleanToken);
-      const { data, error } = await supabase
-        .from('streamer_remote_tokens')
-        .select('streamer_key, streamer_name, label, expires_at, is_revoked')
-        .or(`token.eq.${cleanToken},token_hash.eq.${hash}`)
-        .maybeSingle();
-
-      if (!error && data) {
-        return checkTokenObject(data);
-      }
-    } catch {}
-  }
-
-  // 2. Check local storage backup
   try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('streamer_tokens_')) {
-        const tokens = JSON.parse(localStorage.getItem(key) || '[]');
-        const found = tokens.find(t => t.token === cleanToken);
-        if (found) {
-          const res = checkTokenObject(found);
-          if (res) return res;
-        }
-      }
-    }
-  } catch {}
+    const res = await fetch(`/api/validate-token?token=${encodeURIComponent(cleanToken)}`, {
+      headers: { 'Accept': 'application/json' },
+    });
+    const data = await res.json();
 
-  return { valid: false, reason: 'invalid' };
+    if (res.ok && data.success) {
+      return {
+        valid: true,
+        streamerKey: data.streamerKey,
+        streamerName: data.streamerName || 'Streamer',
+        label: data.label || 'Friend Access',
+        permissions: data.permissions || {},
+        expiresAt: data.expiresAt,
+      };
+    }
+
+    return {
+      valid: false,
+      reason: data.error?.code === 'INVALID_TOKEN' ? data.error.message : (data.reason || 'invalid_token'),
+    };
+  } catch (err) {
+    console.warn('Token validation request error:', err.message);
+    return { valid: false, reason: 'network_error' };
+  }
 }
 
 /**
- * Update streamer state from remote friend link via secure API endpoint.
- * Ensures strict authorization via token rather than direct unauthorized table updates.
+ * Update state remotely via API endpoint with operation idempotency and token auth.
  */
-export async function updateStreamerStateRemote(streamerKey, actionOrState, token) {
-  if (!token) {
-    throw new Error('Moderator token is required for remote counter operations.');
+export async function updateStreamerStateRemote(streamerKey, action, extra = {}, token = null) {
+  if (!streamerKey) return null;
+
+  try {
+    const isReset = action === 'reset' || action === 'resetSession' || action === 'resetAll';
+    const endpoint = isReset ? '/api/reset' : '/api/action';
+    const operationId = `rmt_${Date.now()}_${generateCryptoRandomString(8)}`;
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['X-Moderator-Token'] = token;
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (sessionData?.session?.access_token) {
+      headers['Authorization'] = `Bearer ${sessionData.session.access_token}`;
+    }
+
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        action,
+        key: streamerKey,
+        token: token || undefined,
+        value: extra.value,
+        target: extra.target || (isReset ? 'session' : undefined),
+        deaths: extra.deaths,
+        sessionDeaths: extra.sessionDeaths,
+        allTimeDeaths: extra.allTimeDeaths,
+        bossKills: extra.bossKills,
+        operationId,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return data.data || data;
+    }
+  } catch (err) {
+    console.warn('API remote action error:', err);
   }
-
-  const endpoint = '/api/action';
-  const payload = typeof actionOrState === 'string'
-    ? { action: actionOrState, token, key: streamerKey }
-    : { ...actionOrState, token, key: streamerKey };
-
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    const errData = await res.json().catch(() => ({}));
-    throw new Error(errData?.error?.message || `Remote operation failed (HTTP ${res.status})`);
-  }
-
-  return await res.json();
+  return null;
 }

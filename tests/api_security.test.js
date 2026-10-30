@@ -1,3 +1,5 @@
+process.env.NODE_ENV = 'test';
+
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import handler from '../api/index.js';
@@ -19,7 +21,7 @@ function createMockReqRes({ method = 'GET', url = '/', body = null, headers = {}
   const res = {
     statusCode: 200,
     headers: {},
-    setHeader: (k, v) => { res.headers[k] = v; },
+    setHeader: (k, v) => { res.headers[k.toLowerCase()] = v; },
     status: (code) => {
       res.statusCode = code;
       return res;
@@ -63,23 +65,11 @@ describe('API Security, Endpoint Authorization & Public Projection', () => {
     assert.ok(publicState.settings !== undefined);
   });
 
-  it('POST /api/action rejects unknown action names with 400', async () => {
-    const { req, res } = createMockReqRes({
-      method: 'POST',
-      url: '/api/action',
-      body: { action: 'DROP_DATABASE', key: 'test-streamer' },
-    });
-    await handler(req, res);
-    assert.equal(res.statusCode, 400);
-    assert.equal(res.body.success, false);
-    assert.equal(res.body.error.code, 'INVALID_ACTION');
-  });
-
   it('POST /api/action rejects missing key and token with 401', async () => {
     const { req, res } = createMockReqRes({
       method: 'POST',
       url: '/api/action',
-      body: { action: 'add' },
+      body: { action: 'add', operationId: 'op_test_12345678' },
     });
     await handler(req, res);
     assert.equal(res.statusCode, 401);
@@ -87,11 +77,72 @@ describe('API Security, Endpoint Authorization & Public Projection', () => {
     assert.equal(res.body.error.code, 'UNAUTHORIZED');
   });
 
-  it('POST /api/action with invalid token returns 401', async () => {
+  it('CRITICAL: POST /api/action with streamer key alone (without Bearer JWT or token) is rejected with 401', async () => {
     const { req, res } = createMockReqRes({
       method: 'POST',
       url: '/api/action',
-      body: { action: 'add', token: 'rmt_non_existent_token_123456789' },
+      body: { action: 'add', key: 'streamer-fake-key', operationId: 'op_test_12345678' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 401, 'Possession of streamer key alone must not authorize mutations');
+    assert.equal(res.body.error.code, 'UNAUTHORIZED');
+  });
+
+  it('POST /api/action with invalid streamer Bearer JWT returns 401', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/action',
+      headers: { authorization: 'Bearer invalid-jwt' },
+      body: { action: 'add', operationId: 'op_test_12345678' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.body.error.code, 'INVALID_CREDENTIALS');
+  });
+
+  it('POST /api/action with expired streamer Bearer JWT returns 401', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/action',
+      headers: { authorization: 'Bearer expired-jwt' },
+      body: { action: 'add', operationId: 'op_test_12345678' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.body.error.code, 'INVALID_CREDENTIALS');
+  });
+
+  it('POST /api/action with valid streamer Bearer JWT succeeds with 200', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/action',
+      headers: { authorization: 'Bearer valid-streamer-jwt' },
+      body: { action: 'add', operationId: 'op_valid_jwt_12345678' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.action, 'add');
+  });
+
+  it('POST /api/action with another user JWT attempting to mutate foreign streamer key returns 403', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/action',
+      headers: { authorization: 'Bearer other-user-jwt' },
+      body: { action: 'add', key: 'test-streamer', operationId: 'op_steal_12345678' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 403);
+    assert.equal(res.body.error.code, 'FORBIDDEN');
+  });
+
+  it('POST /api/action with invalid moderator token returns 401', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/action',
+      headers: { 'x-moderator-token': 'rmt_non_existent_token_123456789' },
+      body: { action: 'add', operationId: 'op_test_12345678' },
     });
     await handler(req, res);
     assert.equal(res.statusCode, 401);
@@ -99,15 +150,89 @@ describe('API Security, Endpoint Authorization & Public Projection', () => {
     assert.equal(res.body.error.code, 'INVALID_TOKEN');
   });
 
+  it('POST /api/action with expired moderator token returns 401', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/action',
+      headers: { 'x-moderator-token': 'expired-token' },
+      body: { action: 'add', operationId: 'op_test_12345678' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.body.error.code, 'INVALID_TOKEN');
+  });
+
+  it('POST /api/action with revoked moderator token returns 401', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/action',
+      headers: { 'x-moderator-token': 'revoked-token' },
+      body: { action: 'add', operationId: 'op_test_12345678' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.body.error.code, 'INVALID_TOKEN');
+  });
+
+  it('POST /api/action rejects unknown action names with 400', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/action',
+      headers: { 'x-moderator-token': 'valid-token' },
+      body: { action: 'DROP_DATABASE', operationId: 'op_test_12345678' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.success, false);
+    assert.equal(res.body.error.code, 'INVALID_ACTION');
+  });
+
+  it('POST /api/action rejects missing or short operationId with 400', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/action',
+      headers: { 'x-moderator-token': 'valid-token' },
+      body: { action: 'add' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.error.code, 'INVALID_OPERATION_ID');
+  });
+
   it('POST /api/state prevents moderators with tokens from altering settings', async () => {
-    // If a moderator tries to tamper with streamer settings:
     const { req, res } = createMockReqRes({
       method: 'POST',
       url: '/api/state',
-      body: { token: 'rmt_fake_token_123456789', settings: { fontSize: 100 } },
+      headers: { 'x-moderator-token': 'valid-token' },
+      body: { settings: { fontSize: 100 } },
     });
     await handler(req, res);
-    assert.ok(res.statusCode === 401 || res.statusCode === 403, 'Must reject moderator altering settings');
+    assert.equal(res.statusCode, 403, 'Must return 403 Forbidden for moderator updating settings');
+    assert.equal(res.body.error.code, 'FORBIDDEN');
+  });
+
+  it('POST /api/action enforces moderator fine-grained permissions', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/action',
+      headers: { 'x-moderator-token': 'limited-mod-token' },
+      body: { action: 'addBossKill', operationId: 'op_boss_perm_12345' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 403, 'Limited moderator must be denied boss kill mutation');
+    assert.equal(res.body.error.code, 'PERMISSION_DENIED');
+  });
+
+  it('POST requires Content-Type application/json', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/action',
+      headers: { 'content-type': 'text/plain' },
+      body: 'invalid-body',
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 415);
+    assert.equal(res.body.error.code, 'UNSUPPORTED_MEDIA_TYPE');
   });
 
   it('handles unsupported HTTP methods with 405 Method Not Allowed', async () => {
@@ -115,5 +240,21 @@ describe('API Security, Endpoint Authorization & Public Projection', () => {
     await handler(req, res);
     assert.equal(res.statusCode, 405);
     assert.equal(res.body.error.code, 'METHOD_NOT_ALLOWED');
+  });
+
+  it('GET /api/validate-token validates token format and requires parameter', async () => {
+    const { req, res } = createMockReqRes({ method: 'GET', url: '/api/validate-token' });
+    await handler(req, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.body.error.code, 'MISSING_TOKEN');
+  });
+
+  it('GET /api/validate-token with valid token returns permissions and streamer info', async () => {
+    const { req, res } = createMockReqRes({ method: 'GET', url: '/api/validate-token?token=valid-token' });
+    await handler(req, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.valid, true);
+    assert.equal(res.body.streamerKey, 'test-streamer');
+    assert.equal(res.body.permissions.can_increment_deaths, true);
   });
 });

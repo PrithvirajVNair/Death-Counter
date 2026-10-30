@@ -69,7 +69,7 @@ export default function ShareRemoteModal({ isOpen, onClose }) {
     if (!confirm(`Revoke access for "${tokenObj.label || 'Friend'}"? Their link will stop working immediately.`)) {
       return;
     }
-    await revokeRemoteToken(user, tokenObj.id || tokenObj.token);
+    await revokeRemoteToken(user, tokenObj.id);
     await loadTokens();
   };
 
@@ -279,7 +279,7 @@ export default function ShareRemoteModal({ isOpen, onClose }) {
                     </div>
 
                     <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0 }}>
-                      {!t.is_revoked && info.status !== 'expired' && (
+                      {!t.is_revoked && info.status !== 'expired' && t.token && (
                         <button
                           type="button"
                           className="btn btn--sm btn--secondary"

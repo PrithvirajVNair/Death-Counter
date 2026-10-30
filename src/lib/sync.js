@@ -41,6 +41,11 @@ let localAppActive = false;
 let lastLocalCheckTime = 0;
 
 export async function checkLocalApp() {
+  // Browsers block public HTTPS websites from requesting HTTP loopback (Private Network Access CORS policy)
+  if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+    return false;
+  }
+
   const now = Date.now();
   if (localAppActive && now - lastLocalCheckTime < 2500) return true;
   if (!localAppActive && now - lastLocalCheckTime < 1200) return false;
@@ -95,8 +100,8 @@ export function broadcastUpdate(type, payload) {
     }, 100);
   } catch {}
 
-  // 3. Direct local connection: If companion app is running, send directly to local PC server!
-  if (localAppActive) {
+  // 3. Direct local connection: If companion app is running locally over HTTP, send directly to local PC server!
+  if (localAppActive && typeof window !== 'undefined' && window.location.protocol !== 'https:') {
     try {
       fetch(`${LOCAL_APP_URL}/api/action`, {
         method: 'POST',
@@ -135,20 +140,22 @@ export function broadcastUpdate(type, payload) {
  * Fetch authoritative state directly from local desktop app or private channel
  */
 export async function fetchServerState() {
-  // 1. Direct local companion app connection (0ms latency, private to this PC)
-  const isLocal = await checkLocalApp();
-  if (isLocal) {
-    try {
-      const res = await fetch(`${LOCAL_APP_URL}/api/state?_t=${Date.now()}`, {
-        cache: 'no-store',
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.authenticated !== false) {
-          return data;
+  // 1. Direct local companion app connection (skip on HTTPS to prevent browser Private Network Access CORS blocks)
+  if (typeof window === 'undefined' || window.location.protocol !== 'https:') {
+    const isLocal = await checkLocalApp();
+    if (isLocal) {
+      try {
+        const res = await fetch(`${LOCAL_APP_URL}/api/state?_t=${Date.now()}`, {
+          cache: 'no-store',
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.authenticated !== false) {
+            return data;
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
   }
 
   // 2. Cloud Server Sync: ONLY if a specific channel/key is requested in URL

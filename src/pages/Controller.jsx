@@ -28,7 +28,10 @@ export default function Controller() {
     addBossKill, undoBossKill, resetBossKills,
     setDeathCount, setBossKillCount,
     updateSettings, resetAppearance, updateShortcuts,
+    currentBoss, bosses,
   } = counter;
+
+  const bossAttempts = currentBoss && bosses ? (bosses[currentBoss] || 0) : 0;
 
 
 

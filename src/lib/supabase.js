@@ -1,15 +1,17 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://sexlwhkcropcrdewarmr.supabase.co';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_u3waObuvRCSxPW7AN42bvg_fmP32lF2';
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-  },
-});
+export const supabase = (supabaseUrl && supabaseAnonKey)
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    })
+  : null;
 
 /**
  * Generate a clean, stable streamer key from user object
@@ -27,6 +29,7 @@ export function getStreamerKey(user) {
  * Sign in with Google OAuth
  */
 export async function signInWithGoogle() {
+  if (!supabase) throw new Error("Supabase is not configured.");
   const redirectUrl = typeof window !== 'undefined'
     ? `${window.location.origin}/controller`
     : 'https://soulgamedc-rosy.vercel.app/controller';
@@ -52,6 +55,7 @@ export async function signInWithGoogle() {
  * Sign in with email/password fallback
  */
 export async function signInWithEmail(email, password) {
+  if (!supabase) throw new Error("Supabase is not configured.");
   const { data, error } = await supabase.auth.signInWithPassword({
     email,
     password,
@@ -64,6 +68,7 @@ export async function signInWithEmail(email, password) {
  * Sign up with email/password
  */
 export async function signUpWithEmail(email, password) {
+  if (!supabase) throw new Error("Supabase is not configured.");
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
@@ -76,6 +81,7 @@ export async function signUpWithEmail(email, password) {
  * Sign out
  */
 export async function signOutUser() {
+  if (!supabase) return;
   const { error } = await supabase.auth.signOut();
   if (error) throw error;
 }
@@ -84,7 +90,7 @@ export async function signOutUser() {
  * Save user counter state to Supabase
  */
 export async function saveCloudState(user, state) {
-  if (!user) return;
+  if (!user || !supabase) return;
   const streamerKey = getStreamerKey(user);
 
   try {
@@ -133,7 +139,7 @@ export async function saveCloudState(user, state) {
  * Load user counter state from Supabase by streamerKey
  */
 export async function loadCloudStateByKey(streamerKey) {
-  if (!streamerKey || streamerKey === 'guest') return null;
+  if (!streamerKey || streamerKey === 'guest' || !supabase) return null;
 
   try {
     const { data, error } = await supabase

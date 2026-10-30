@@ -112,45 +112,54 @@ export default function CustomizationPanel({
                 </p>
 
                 {/* Direct .exe Download Button (Direct EXE file, no zip, no batch script) */}
-                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', boxSizing: 'border-box' }}>
                   <a
                     href="/DeathCounterHotkeys.exe"
                     download="DeathCounterHotkeys.exe"
-                    className="btn btn--primary"
+                    className="btn btn--primary btn--full"
                     style={{
                       textDecoration: 'none',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       gap: '8px',
-                      padding: '12px 18px',
+                      padding: '11px 14px',
                       fontWeight: 600,
                       fontSize: '13px',
-                      flex: '1 1 auto',
+                      width: '100%',
+                      maxWidth: '100%',
+                      boxSizing: 'border-box',
+                      whiteSpace: 'normal',
+                      textAlign: 'center',
                     }}
                     id="btn-download-app-exe"
                   >
-                    <Download size={16} />
+                    <Download size={16} style={{ flexShrink: 0 }} />
                     <span>Download App (DeathCounterHotkeys.exe)</span>
                   </a>
                   <a
                     href="https://github.com/PrithvirajVNair/Death-Counter"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="btn btn--secondary"
+                    className="btn btn--secondary btn--full"
                     style={{
                       textDecoration: 'none',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       gap: '6px',
-                      padding: '12px 14px',
-                      fontSize: '12px',
+                      padding: '7px 12px',
+                      fontSize: '11.5px',
+                      width: '100%',
+                      maxWidth: '100%',
+                      boxSizing: 'border-box',
+                      whiteSpace: 'normal',
+                      textAlign: 'center',
                     }}
                     id="btn-open-github"
                   >
-                    <ExternalLink size={13} />
-                    <span>GitHub Source</span>
+                    <ExternalLink size={13} style={{ flexShrink: 0 }} />
+                    <span>GitHub Source Code</span>
                   </a>
                 </div>
 

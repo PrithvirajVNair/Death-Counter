@@ -20,39 +20,43 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 
 /**
  * Generate cryptographically secure random string with given character length
+ * Throws an explicit error if a secure cryptographic source is unavailable.
  */
 export function generateCryptoRandomString(length = 32) {
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    const bytes = new Uint8Array(length);
-    crypto.getRandomValues(bytes);
-    let str = '';
-    for (let i = 0; i < length; i++) {
-      str += charset[bytes[i] % charset.length];
-    }
-    return str;
+  const cryptoObj = typeof globalThis !== 'undefined' && globalThis.crypto ? globalThis.crypto : null;
+  if (!cryptoObj || typeof cryptoObj.getRandomValues !== 'function') {
+    throw new Error('Cryptographically secure PRNG (crypto.getRandomValues) is required but unavailable.');
   }
-  return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+
+  const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const bytes = new Uint8Array(length);
+  cryptoObj.getRandomValues(bytes);
+  let str = '';
+  for (let i = 0; i < length; i++) {
+    str += charset[bytes[i] % charset.length];
+  }
+  return str;
 }
 
 /**
- * Compute SHA-256 hex string for a given token
+ * Compute SHA-256 hex string for a given token.
+ * Throws an explicit error if Web Crypto subtle.digest is unavailable.
  */
 export async function sha256Hex(str) {
-  if (typeof crypto !== 'undefined' && crypto.subtle && crypto.subtle.digest) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(str);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  if (typeof str !== 'string' || !str) {
+    throw new Error('sha256Hex requires a non-empty string input.');
   }
-  // Browser fallback for non-secure contexts (e.g. dev http localhost)
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash) + str.charCodeAt(i);
-    hash |= 0;
+
+  const cryptoObj = typeof globalThis !== 'undefined' && globalThis.crypto ? globalThis.crypto : null;
+  if (!cryptoObj || !cryptoObj.subtle || typeof cryptoObj.subtle.digest !== 'function') {
+    throw new Error('Cryptographically secure SHA-256 (crypto.subtle.digest) is required but unavailable.');
   }
-  return Math.abs(hash).toString(16).padStart(64, '0');
+
+  const encoder = new TextEncoder();
+  const data = encoder.encode(str.trim());
+  const hashBuffer = await cryptoObj.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 /**
@@ -157,62 +161,135 @@ export async function signOutUser() {
 }
 
 /**
- * Save user counter state to Supabase.
- * Strictly preserves boss history and settings without replacing omitted properties with empty defaults.
+ * Save user configuration state to Supabase.
+ * Strictly updates settings, shortcuts, bosses, and currentBoss.
+ * NEVER writes or overwrites counter columns (deaths, session_deaths, all_time_deaths, boss_kills).
  */
-export async function saveCloudState(user, state) {
-  if (!user || !state) return;
+export async function saveCloudConfig(user, config) {
+  if (!user || !config) return null;
   const streamerKey = getStreamerKey(user);
 
   try {
-    const payload = {
-      user_id: user.id,
-      email: user.email,
-      display_name: user.user_metadata?.full_name || user.email?.split("@")[0] || "Streamer",
-      avatar_url: user.user_metadata?.avatar_url || "",
-      streamer_key: streamerKey,
+    // 1. Try atomic configuration RPC first
+    const { data: rpcData, error: rpcErr } = await supabase.rpc('update_streamer_config', {
+      p_streamer_key: streamerKey,
+      p_settings: config.settings || null,
+      p_shortcuts: config.shortcuts || null,
+      p_bosses: config.bosses !== undefined ? config.bosses : null,
+      p_current_boss: config.currentBoss !== undefined ? config.currentBoss : null,
+      p_display_name: user.user_metadata?.full_name || user.email?.split("@")[0] || null,
+    });
+
+    if (!rpcErr && rpcData) {
+      return rpcData;
+    }
+  } catch {}
+
+  // 2. Direct column update fallback for permitted configuration columns only
+  try {
+    const configPayload = {
       updated_at: new Date().toISOString(),
     };
+    if (config.settings !== undefined) configPayload.settings = config.settings;
+    if (config.shortcuts !== undefined) configPayload.shortcuts = config.shortcuts;
+    if (config.bosses !== undefined) configPayload.bosses = config.bosses;
+    if (config.currentBoss !== undefined) configPayload.current_boss = config.currentBoss;
 
-    if (state.deaths !== undefined) payload.deaths = Math.max(0, state.deaths);
-    if (state.sessionDeaths !== undefined) payload.session_deaths = Math.max(0, state.sessionDeaths);
-    if (state.allTimeDeaths !== undefined) payload.all_time_deaths = Math.max(0, state.allTimeDeaths);
-    if (state.bossKills !== undefined) payload.boss_kills = Math.max(0, state.bossKills);
-    if (state.settings !== undefined) payload.settings = state.settings;
-    if (state.shortcuts !== undefined) payload.shortcuts = state.shortcuts;
-    if (state.bosses !== undefined) payload.bosses = state.bosses;
-    if (state.currentBoss !== undefined) payload.current_boss = state.currentBoss;
-    if (state.revision !== undefined) payload.revision = state.revision;
-    if (state.lastUpdated !== undefined) payload.last_updated = state.lastUpdated;
-
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("streamer_states")
-      .upsert(payload, { onConflict: "user_id" });
+      .update(configPayload)
+      .eq("user_id", user.id)
+      .select('revision, last_updated')
+      .maybeSingle();
 
-    if (!error) return;
+    if (!error) return data;
   } catch (err) {
-    console.warn("Supabase saveCloudState error:", err);
+    console.warn("Supabase saveCloudConfig error:", err);
+  }
+  return null;
+}
+
+/**
+ * Backward-compatible wrapper: routes to saveCloudConfig.
+ * Never persists or overwrites counter values.
+ */
+export async function saveCloudState(user, state) {
+  return saveCloudConfig(user, state);
+}
+
+/**
+ * Perform an atomic counter mutation for an authenticated streamer.
+ * Dispatches to /api/action or /api/reset with verified Bearer JWT and unique operation ID.
+ * Returns the authoritative server state.
+ */
+export async function applyStreamerMutation(action, value = 0, { streamerKey, operationId, extra = {} } = {}) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+
+  if (!token) {
+    throw new Error('Authentication required: Active session needed for counter mutation.');
   }
 
-  // Fallback: Save to user metadata
-  try {
-    const metaPayload = {
-      streamerKey,
-      deaths: state.deaths ?? 0,
-      sessionDeaths: state.sessionDeaths ?? 0,
-      allTimeDeaths: state.allTimeDeaths ?? 0,
-      bossKills: state.bossKills ?? 0,
-      settings: state.settings || {},
-      shortcuts: state.shortcuts || {},
-      lastUpdated: state.lastUpdated || Date.now(),
-    };
-    if (state.bosses !== undefined) metaPayload.bosses = state.bosses;
-    if (state.currentBoss !== undefined) metaPayload.currentBoss = state.currentBoss;
+  const opId = operationId || `str_${Date.now()}_${generateCryptoRandomString(12)}`;
+  const isReset = action === 'reset' || action === 'resetSession' || action === 'resetAll';
+  const endpoint = isReset ? '/api/reset' : '/api/action';
 
-    await supabase.auth.updateUser({
-      data: metaPayload,
-    });
-  } catch {}
+  const payload = isReset
+    ? { type: 'reset', target: extra.target || (action === 'resetAll' ? 'all' : 'session'), operationId: opId, key: streamerKey }
+    : { action, value, operationId: opId, key: streamerKey };
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      'X-Operation-Id': opId,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const json = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    const err = new Error(json.error?.message || 'Mutation failed');
+    err.status = res.status;
+    err.code = json.error?.code || 'MUTATION_FAILED';
+    throw err;
+  }
+
+  return {
+    deaths: json.deaths,
+    sessionDeaths: json.sessionDeaths,
+    allTimeDeaths: json.allTimeDeaths,
+    bossKills: json.bossKills,
+    revision: json.revision,
+    lastUpdated: json.lastUpdated,
+    deduped: json.deduped,
+  };
+}
+
+/**
+ * Request a dedicated desktop companion token for the authenticated streamer.
+ */
+export async function requestCompanionToken(streamerKey) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  if (!token) throw new Error('Authentication required to pair desktop companion.');
+
+  const res = await fetch('/api/pair-companion', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({ streamerKey }),
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json.error?.message || 'Failed to generate companion pairing token.');
+  }
+  return json;
 }
 
 /**
@@ -388,8 +465,14 @@ export async function validateRemoteToken(token) {
   const cleanToken = token.trim();
 
   try {
-    const res = await fetch(`/api/validate-token?token=${encodeURIComponent(cleanToken)}`, {
-      headers: { 'Accept': 'application/json' },
+    const res = await fetch('/api/validate-token', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'X-Moderator-Token': cleanToken,
+      },
+      body: JSON.stringify({ token: cleanToken }),
     });
     const data = await res.json();
 

@@ -11,14 +11,14 @@ import CustomizationPanel from '../components/CustomizationPanel';
 import Embers from '../components/Embers';
 import ToastContainer, { showToast } from '../components/Toast';
 import { DEFAULT_PRESET_COLORS } from '../lib/defaults';
-import { loadCloudStateByKey, supabase } from '../lib/supabase';
+import { loadCloudStateByKey, supabase, saveCloudConfig, applyStreamerMutation } from '../lib/supabase';
 import { Key, Copy, Check, LogOut, Users, Eye, EyeOff, RefreshCw } from 'lucide-react';
 import '../styles/controller.css';
 import '../styles/auth.css';
 
 export default function Controller() {
   const counter = useDeathCounter();
-  const { user, loading: authLoading, streamerKey, signOut, saveCloudState } = useAuth();
+  const { user, loading: authLoading, streamerKey, signOut } = useAuth();
   const [copiedKey, setCopiedKey] = useState(false);
   const [showStreamerKey, setShowStreamerKey] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
@@ -26,10 +26,7 @@ export default function Controller() {
 
   const {
     deaths, sessionDeaths, allTimeDeaths, bossKills, settings, shortcuts, deathAnim, bossSlainAnim,
-    addDeath, undoDeath, resetDeaths, resetSession,
-    addBossKill, undoBossKill, resetBossKills,
-    setDeathCount, setBossKillCount,
-    updateSettings, resetAppearance, _updateShortcuts,
+    updateSettings, resetAppearance,
     currentBoss, bosses,
   } = counter;
 
@@ -203,7 +200,110 @@ export default function Controller() {
     };
   }, [user, streamerKey, counter, settings, shortcuts]);
 
-  // 2. Sync to Supabase ONLY when streamer makes local changes on the Controller
+  // ─── Wrapped Atomic Counter Actions ───
+  // Optimistically updates local UI and dispatches atomic mutation to backend.
+  // Reconciles with authoritative server state upon response.
+  const handleAddDeath = useCallback(async () => {
+    counter.addDeath();
+    if (!streamerKey || !user) return;
+    try {
+      const res = await applyStreamerMutation('add', 1, { streamerKey });
+      if (res && res.revision) counter.loadFullState(res);
+    } catch (err) {
+      console.warn('Atomic add death error:', err);
+    }
+  }, [counter, streamerKey, user]);
+
+  const handleUndoDeath = useCallback(async () => {
+    counter.undoDeath();
+    if (!streamerKey || !user) return;
+    try {
+      const res = await applyStreamerMutation('undo', 1, { streamerKey });
+      if (res && res.revision) counter.loadFullState(res);
+    } catch (err) {
+      console.warn('Atomic undo death error:', err);
+    }
+  }, [counter, streamerKey, user]);
+
+  const handleResetDeaths = useCallback(async () => {
+    counter.resetDeaths();
+    if (!streamerKey || !user) return;
+    try {
+      const res = await applyStreamerMutation('resetSession', 0, { streamerKey, extra: { target: 'session' } });
+      if (res && res.revision) counter.loadFullState(res);
+    } catch (err) {
+      console.warn('Atomic reset deaths error:', err);
+    }
+  }, [counter, streamerKey, user]);
+
+  const handleResetSession = useCallback(async () => {
+    counter.resetSession();
+    if (!streamerKey || !user) return;
+    try {
+      const res = await applyStreamerMutation('resetSession', 0, { streamerKey, extra: { target: 'session' } });
+      if (res && res.revision) counter.loadFullState(res);
+    } catch (err) {
+      console.warn('Atomic reset session error:', err);
+    }
+  }, [counter, streamerKey, user]);
+
+  const handleSetDeathCount = useCallback(async (val) => {
+    counter.setDeathCount(val);
+    if (!streamerKey || !user) return;
+    try {
+      const res = await applyStreamerMutation('setDeath', val, { streamerKey });
+      if (res && res.revision) counter.loadFullState(res);
+    } catch (err) {
+      console.warn('Atomic set death error:', err);
+    }
+  }, [counter, streamerKey, user]);
+
+  const handleAddBossKill = useCallback(async () => {
+    counter.addBossKill();
+    if (!streamerKey || !user) return;
+    try {
+      const res = await applyStreamerMutation('addBossKill', 1, { streamerKey });
+      if (res && res.revision) counter.loadFullState(res);
+    } catch (err) {
+      console.warn('Atomic add boss kill error:', err);
+    }
+  }, [counter, streamerKey, user]);
+
+  const handleUndoBossKill = useCallback(async () => {
+    counter.undoBossKill();
+    if (!streamerKey || !user) return;
+    try {
+      const res = await applyStreamerMutation('undoBossKill', 1, { streamerKey });
+      if (res && res.revision) counter.loadFullState(res);
+    } catch (err) {
+      console.warn('Atomic undo boss kill error:', err);
+    }
+  }, [counter, streamerKey, user]);
+
+  const handleResetBossKills = useCallback(async () => {
+    counter.resetBossKills();
+    if (!streamerKey || !user) return;
+    try {
+      const res = await applyStreamerMutation('setBossKill', 0, { streamerKey });
+      if (res && res.revision) counter.loadFullState(res);
+    } catch (err) {
+      console.warn('Atomic reset boss kills error:', err);
+    }
+  }, [counter, streamerKey, user]);
+
+  const handleSetBossKillCount = useCallback(async (val) => {
+    counter.setBossKillCount(val);
+    if (!streamerKey || !user) return;
+    try {
+      const res = await applyStreamerMutation('setBossKill', val, { streamerKey });
+      if (res && res.revision) counter.loadFullState(res);
+    } catch (err) {
+      console.warn('Atomic set boss kill count error:', err);
+    }
+  }, [counter, streamerKey, user]);
+
+  // 2. Configuration Sync to Supabase ONLY when streamer updates preferences
+  // Strictly separates configuration from counters: NEVER writes or overwrites counter values
   useEffect(() => {
     if (!user || !streamerKey || !hasLoadedCloudRef.current) return;
 
@@ -212,12 +312,8 @@ export default function Controller() {
     const shortcutsStr = JSON.stringify(shortcuts || {});
     const bossesStr = JSON.stringify(bosses || {});
 
-    // Don't save if the state simply matches what was loaded/pushed from the cloud
+    // Don't save if configuration simply matches what was loaded
     if (
-      prev.deaths === deaths &&
-      prev.sessionDeaths === sessionDeaths &&
-      prev.allTimeDeaths === allTimeDeaths &&
-      prev.bossKills === bossKills &&
       prev.settingsHash === settingsStr &&
       prev.shortcutsHash === shortcutsStr &&
       prev.bossesHash === bossesStr &&
@@ -226,31 +322,18 @@ export default function Controller() {
       return;
     }
 
-    lastCloudStateRef.current = {
-      deaths,
-      sessionDeaths,
-      allTimeDeaths,
-      bossKills,
-      settingsHash: settingsStr,
-      shortcutsHash: shortcutsStr,
-      bossesHash: bossesStr,
-      currentBoss,
-      revision: (counter.revision || 1) + 1,
-    };
+    lastCloudStateRef.current.settingsHash = settingsStr;
+    lastCloudStateRef.current.shortcutsHash = shortcutsStr;
+    lastCloudStateRef.current.bossesHash = bossesStr;
+    lastCloudStateRef.current.currentBoss = currentBoss;
 
-    saveCloudState({
-      deaths,
-      sessionDeaths,
-      allTimeDeaths,
-      bossKills,
+    saveCloudConfig(user, {
       settings,
       shortcuts,
       bosses,
       currentBoss,
-      revision: (counter.revision || 1) + 1,
-      lastUpdated: Date.now(),
     });
-  }, [deaths, sessionDeaths, allTimeDeaths, bossKills, settings, shortcuts, bosses, currentBoss, user, streamerKey, counter.revision, saveCloudState]);
+  }, [settings, shortcuts, bosses, currentBoss, user, streamerKey]);
 
   // Auth Gate: Require sign in to use counter
   if (authLoading) {
@@ -370,15 +453,15 @@ export default function Controller() {
             deaths={deaths}
             sessionDeaths={sessionDeaths}
             allTimeDeaths={allTimeDeaths}
-            onAdd={addDeath}
-            onUndo={undoDeath}
-            onReset={resetDeaths}
+            onAdd={handleAddDeath}
+            onUndo={handleUndoDeath}
+            onReset={handleResetDeaths}
             bossKills={bossKills}
-            onAddBossKill={addBossKill}
-            onUndoBossKill={undoBossKill}
-            onResetBossKills={resetBossKills}
-            onSetDeathCount={setDeathCount}
-            onSetBossKillCount={setBossKillCount}
+            onAddBossKill={handleAddBossKill}
+            onUndoBossKill={handleUndoBossKill}
+            onResetBossKills={handleResetBossKills}
+            onSetDeathCount={handleSetDeathCount}
+            onSetBossKillCount={handleSetBossKillCount}
             sessionCountVisible={settings.sessionCountVisible}
           />
 
@@ -412,7 +495,7 @@ export default function Controller() {
             bossKills={bossKills}
             onUpdateSettings={updateSettings}
             onResetAppearance={resetAppearance}
-            onResetSession={resetSession}
+            onResetSession={handleResetSession}
           />
         </aside>
       </div>

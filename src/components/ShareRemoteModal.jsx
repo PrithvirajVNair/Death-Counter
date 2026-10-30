@@ -54,7 +54,7 @@ export default function ShareRemoteModal({ isOpen, onClose }) {
         durationHours: Number(durationHours),
       });
 
-      const fullUrl = `${window.location.origin}/remote?token=${encodeURIComponent(tokenRecord.token)}`;
+      const fullUrl = `${window.location.origin}/remote#token=${encodeURIComponent(tokenRecord.token)}`;
       setLatestLink(fullUrl);
       setLabel('');
       await loadTokens();

@@ -7,6 +7,8 @@ import {
   signUpWithEmail,
   signOutUser,
   saveCloudState,
+  saveCloudConfig,
+  requestCompanionToken,
   regenerateStreamerKey,
 } from "../lib/supabase";
 import { clearAllStorage } from "../lib/storage";
@@ -89,6 +91,8 @@ export function AuthProvider({ children }) {
     signOut: handleSignOut,
     regenerateKey: handleRegenerateKey,
     saveCloudState: (state) => saveCloudState(user, state),
+    saveCloudConfig: (config) => saveCloudConfig(user, config),
+    requestCompanionToken: () => requestCompanionToken(streamerKey),
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

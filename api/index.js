@@ -5,6 +5,7 @@ import {
   resetState,
   verifyStreamerAuth,
   validateModeratorToken,
+  createCompanionToken,
 } from './_db.js';
 
 const ALLOWED_ACTIONS = new Set([
@@ -26,10 +27,43 @@ const ALLOWED_ACTIONS = new Set([
 
 const MAX_BODY_BYTES = 65536; // 64 KB limit
 
-// ─── Distributed / Sliding Window Rate Limiting ───
+// ─── Distributed / Sliding Window Rate Limiting (Upstash Redis + Local Fallback) ───
 const rateLimitMap = globalThis.__SDC_RATE_LIMITS__ || (globalThis.__SDC_RATE_LIMITS__ = new Map());
 
-function checkRateLimit(key, limit, windowSeconds) {
+async function checkRateLimit(key, limit, windowSeconds) {
+  const redisUrl = process.env.UPSTASH_REDIS_REST_URL;
+  const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+  // 1. Distributed Rate Limiting via Upstash Redis REST if configured
+  if (redisUrl && redisToken) {
+    try {
+      const pipelineUrl = `${redisUrl.replace(/\/$/, '')}/pipeline`;
+      const res = await fetch(pipelineUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${redisToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify([
+          ['INCR', `sdc:rl:${key}`],
+          ['EXPIRE', `sdc:rl:${key}`, windowSeconds],
+        ]),
+      });
+
+      if (res.ok) {
+        const results = await res.json();
+        const currentCount = results[0]?.result || 1;
+        if (currentCount > limit) {
+          return { allowed: false, remaining: 0, resetSeconds: windowSeconds, distributed: true };
+        }
+        return { allowed: true, remaining: Math.max(0, limit - currentCount), resetSeconds: windowSeconds, distributed: true };
+      }
+    } catch (e) {
+      console.warn('[RateLimit] Upstash Redis request failed, falling back to local memory:', e.message);
+    }
+  }
+
+  // 2. Local in-memory sliding window fallback
   const now = Date.now();
   const windowMs = windowSeconds * 1000;
   let record = rateLimitMap.get(key);
@@ -37,20 +71,20 @@ function checkRateLimit(key, limit, windowSeconds) {
   if (!record || now - record.startTime > windowMs) {
     record = { count: 1, startTime: now };
     rateLimitMap.set(key, record);
-    return { allowed: true, remaining: limit - 1, resetSeconds: windowSeconds };
+    return { allowed: true, remaining: limit - 1, resetSeconds: windowSeconds, distributed: false };
   }
 
   record.count += 1;
   const resetSeconds = Math.max(1, Math.ceil((record.startTime + windowMs - now) / 1000));
 
   if (record.count > limit) {
-    return { allowed: false, remaining: 0, resetSeconds };
+    return { allowed: false, remaining: 0, resetSeconds, distributed: false };
   }
 
-  return { allowed: true, remaining: limit - record.count, resetSeconds };
+  return { allowed: true, remaining: limit - record.count, resetSeconds, distributed: false };
 }
 
-// Periodic cleanup of expired rate limit keys
+// Periodic cleanup of expired rate limit keys (unref'd to prevent keeping Node process open)
 if (!globalThis.__SDC_RATE_LIMIT_CLEANUP__) {
   const cleanupTimer = setInterval(() => {
     const now = Date.now();
@@ -125,11 +159,12 @@ function isValidChannelKey(key) {
 }
 
 export default async function handler(req, res) {
-  // CORS configuration
+  // CORS & Security headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Moderator-Token, X-Operation-Id, X-Requested-With');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Moderator-Token, X-Companion-Token, X-Operation-Id, X-Requested-With');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Referrer-Policy', 'no-referrer');
 
   if (req.method === 'OPTIONS') {
     return res.status(204).end();
@@ -144,13 +179,14 @@ export default async function handler(req, res) {
     const isActionPath = pathname.endsWith('/action') || pathname.includes('/action');
     const isResetPath = pathname.endsWith('/reset') || pathname.includes('/reset');
     const isValidateTokenPath = pathname.endsWith('/validate-token') || pathname.includes('/validate-token');
+    const isPairCompanionPath = pathname.endsWith('/pair-companion') || pathname.includes('/pair-companion');
 
     const queryToken = (url.searchParams.get('token') || '').trim();
     const queryKey = (url.searchParams.get('key') || url.searchParams.get('streamerKey') || url.searchParams.get('channel') || '').trim();
 
-    // ─── 1. Remote Token Validation (GET /api/validate-token) ───
-    if (req.method === 'GET' && isValidateTokenPath) {
-      const rl = checkRateLimit(`ip:val:${clientIp}`, 30, 60);
+    // ─── 1. Remote Token Validation (POST preferred, GET supported) ───
+    if (isValidateTokenPath) {
+      const rl = await checkRateLimit(`ip:val:${clientIp}`, 30, 60);
       if (!rl.allowed) {
         res.setHeader('Retry-After', rl.resetSeconds);
         return res.status(429).json({
@@ -160,15 +196,26 @@ export default async function handler(req, res) {
         });
       }
 
-      if (!queryToken) {
+      let rawTokenToValidate = queryToken;
+      if (req.method === 'POST') {
+        const headerToken = req.headers['x-moderator-token'] || req.headers['x-companion-token'];
+        if (headerToken) {
+          rawTokenToValidate = String(headerToken).trim();
+        } else {
+          const body = await parseBody(req);
+          if (body && body.token) rawTokenToValidate = String(body.token).trim();
+        }
+      }
+
+      if (!rawTokenToValidate) {
         return res.status(400).json({
           success: false,
           ok: false,
-          error: { code: 'MISSING_TOKEN', message: 'Token parameter is required.' },
+          error: { code: 'MISSING_TOKEN', message: 'Token parameter or X-Moderator-Token header is required.' },
         });
       }
 
-      const valResult = await validateModeratorToken(queryToken);
+      const valResult = await validateModeratorToken(rawTokenToValidate);
       if (!valResult.valid) {
         return res.status(401).json({
           success: false,
@@ -186,7 +233,7 @@ export default async function handler(req, res) {
 
     // ─── 2. Public State Retrieval (GET /api/state) ───
     if (req.method === 'GET') {
-      const rl = checkRateLimit(`ip:get:${clientIp}`, 120, 60);
+      const rl = await checkRateLimit(`ip:get:${clientIp}`, 120, 60);
       if (!rl.allowed) {
         res.setHeader('Retry-After', rl.resetSeconds);
         return res.status(429).json({
@@ -251,7 +298,7 @@ export default async function handler(req, res) {
     // ─── Authentication & Authorization Verification ───
     // Priority 1: Check Streamer Supabase JWT in Authorization header
     const authHeader = req.headers['authorization'] || '';
-    const reqToken = (req.headers['x-moderator-token'] || body.token || queryToken || '').trim();
+    const reqToken = (req.headers['x-moderator-token'] || req.headers['x-companion-token'] || body.token || queryToken || '').trim();
     const explicitKey = (body.key || body.streamerKey || body.channel || queryKey || '').trim();
 
     let authorizedStreamerKey = null;
@@ -280,14 +327,34 @@ export default async function handler(req, res) {
 
       authorizedStreamerKey = verifiedStreamer.streamerKey;
       authType = 'streamer';
+
+      // ─── 2.5 Desktop Companion Pairing Endpoint (POST /api/pair-companion) ───
+      if (isPairCompanionPath) {
+        const pairRL = await checkRateLimit(`pair:${verifiedStreamer.userId}`, 10, 60);
+        if (!pairRL.allowed) {
+          res.setHeader('Retry-After', pairRL.resetSeconds);
+          return res.status(429).json({
+            success: false,
+            ok: false,
+            error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many companion pairing requests.' },
+          });
+        }
+
+        const companionData = await createCompanionToken(verifiedStreamer.streamerKey, verifiedStreamer.userId);
+        return res.status(200).json({
+          success: true,
+          ok: true,
+          ...companionData,
+        });
+      }
     } else if (reqToken) {
-      // Moderator Authentication via Token
+      // Moderator / Companion Authentication via Token
       const tokenResult = await validateModeratorToken(reqToken);
       if (!tokenResult.valid) {
         return res.status(401).json({
           success: false,
           ok: false,
-          error: { code: 'INVALID_TOKEN', message: `Remote moderator token is ${tokenResult.reason}.` },
+          error: { code: 'INVALID_TOKEN', message: `Remote token is ${tokenResult.reason}.` },
         });
       }
 
@@ -309,7 +376,7 @@ export default async function handler(req, res) {
         ok: false,
         error: {
           code: 'UNAUTHORIZED',
-          message: 'Authentication required. Provide a valid Bearer token (for streamers) or a Moderator token.',
+          message: 'Authentication required. Provide a valid Bearer token (for streamers) or a Moderator/Companion token.',
         },
       });
     }
@@ -319,7 +386,7 @@ export default async function handler(req, res) {
       ? `streamer:${authorizedStreamerKey}`
       : `mod:${reqToken.slice(0, 16)}`;
     const limitMax = authType === 'streamer' ? 120 : 60;
-    const rl = checkRateLimit(rateLimitKey, limitMax, 60);
+    const rl = await checkRateLimit(rateLimitKey, limitMax, 60);
 
     if (!rl.allowed) {
       res.setHeader('Retry-After', rl.resetSeconds);
@@ -348,7 +415,7 @@ export default async function handler(req, res) {
           return res.status(403).json({
             success: false,
             ok: false,
-            error: { code: 'PERMISSION_DENIED', message: 'Moderator token does not have permission to modify deaths.' },
+            error: { code: 'PERMISSION_DENIED', message: 'Token does not have permission to modify deaths.' },
           });
         }
         if ((rawAction === 'addBossKill' || rawAction === 'bossSlain' || rawAction === 'undoBossKill') &&
@@ -356,7 +423,7 @@ export default async function handler(req, res) {
           return res.status(403).json({
             success: false,
             ok: false,
-            error: { code: 'PERMISSION_DENIED', message: 'Moderator token does not have permission to modify boss kills.' },
+            error: { code: 'PERMISSION_DENIED', message: 'Token does not have permission to modify boss kills.' },
           });
         }
         if ((rawAction === 'setDeath' || rawAction === 'setCount') &&
@@ -364,7 +431,7 @@ export default async function handler(req, res) {
           return res.status(403).json({
             success: false,
             ok: false,
-            error: { code: 'PERMISSION_DENIED', message: 'Moderator token does not have permission to set death count.' },
+            error: { code: 'PERMISSION_DENIED', message: 'Token does not have permission to set death count.' },
           });
         }
         if ((rawAction === 'setBossKill' || rawAction === 'setBossCount') &&
@@ -372,7 +439,7 @@ export default async function handler(req, res) {
           return res.status(403).json({
             success: false,
             ok: false,
-            error: { code: 'PERMISSION_DENIED', message: 'Moderator token does not have permission to set boss kill count.' },
+            error: { code: 'PERMISSION_DENIED', message: 'Token does not have permission to set boss kill count.' },
           });
         }
         if ((rawAction === 'resetSession' || rawAction === 'reset') &&
@@ -380,14 +447,14 @@ export default async function handler(req, res) {
           return res.status(403).json({
             success: false,
             ok: false,
-            error: { code: 'PERMISSION_DENIED', message: 'Moderator token does not have permission to reset session.' },
+            error: { code: 'PERMISSION_DENIED', message: 'Token does not have permission to reset session.' },
           });
         }
         if (rawAction === 'resetAll' && !moderatorPermissions.can_reset_all) {
           return res.status(403).json({
             success: false,
             ok: false,
-            error: { code: 'PERMISSION_DENIED', message: 'Moderator token does not have permission to perform a full reset.' },
+            error: { code: 'PERMISSION_DENIED', message: 'Token does not have permission to perform a full reset.' },
           });
         }
       }
@@ -444,14 +511,14 @@ export default async function handler(req, res) {
           return res.status(403).json({
             success: false,
             ok: false,
-            error: { code: 'PERMISSION_DENIED', message: 'Moderator token does not have permission to reset session.' },
+            error: { code: 'PERMISSION_DENIED', message: 'Token does not have permission to reset session.' },
           });
         }
         if (target === 'all' && !moderatorPermissions.can_reset_all) {
           return res.status(403).json({
             success: false,
             ok: false,
-            error: { code: 'PERMISSION_DENIED', message: 'Moderator token does not have permission for full reset.' },
+            error: { code: 'PERMISSION_DENIED', message: 'Token does not have permission for full reset.' },
           });
         }
       }
@@ -480,13 +547,13 @@ export default async function handler(req, res) {
       });
     }
 
-    // ─── 5. Full State Update Handler (POST /api/state) ───
+    // ─── 5. Full Configuration Update Handler (POST /api/state) ───
     // Strictly forbidden for remote moderators (only streamers can update settings/shortcuts)
     if (authType !== 'streamer') {
       return res.status(403).json({
         success: false,
         ok: false,
-        error: { code: 'FORBIDDEN', message: 'Only authenticated streamers may update configuration or full state.' },
+        error: { code: 'FORBIDDEN', message: 'Only authenticated streamers may update configuration.' },
       });
     }
 
@@ -498,6 +565,10 @@ export default async function handler(req, res) {
       sessionDeaths: updated.sessionDeaths,
       allTimeDeaths: updated.allTimeDeaths,
       bossKills: updated.bossKills,
+      settings: updated.settings,
+      shortcuts: updated.shortcuts,
+      bosses: updated.bosses,
+      currentBoss: updated.currentBoss,
       revision: updated.revision || 1,
       lastUpdated: updated.lastUpdated,
       data: updated,

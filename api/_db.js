@@ -1,35 +1,38 @@
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-
 let supabaseClient = null;
 
-export function getSupabase() {
-  if (supabaseClient) return supabaseClient;
+export function getSupabaseCredentials() {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
+  return { url, key, isConfigured: Boolean(url && key) };
+}
 
-  if (!SUPABASE_URL) {
+export function getSupabase() {
+  const { url, key } = getSupabaseCredentials();
+
+  // In production, server operations MUST have both URL and Service Role Key
+  if (!url || !key) {
     if (process.env.NODE_ENV === 'production') {
-      throw new Error('[DB Config Error] SUPABASE_URL environment variable is missing.');
+      const err = new Error('[DB Config Error] SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are strictly required for production operations.');
+      err.code = 'CONFIG_ERROR';
+      err.status = 503;
+      throw err;
     }
     return null;
   }
 
-  // Production requires server-side service role key for privileged and secure mutations
-  const key = SUPABASE_SERVICE_KEY || SUPABASE_ANON_KEY;
-  if (!key) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('[DB Config Error] SUPABASE_SERVICE_ROLE_KEY environment variable is missing.');
-    }
-    return null;
+  if (supabaseClient && supabaseClient._url === url && supabaseClient._key === key) {
+    return supabaseClient;
   }
 
   try {
-    supabaseClient = createClient(SUPABASE_URL, key, {
+    supabaseClient = createClient(url, key, {
       auth: { persistSession: false },
     });
+    supabaseClient._url = url;
+    supabaseClient._key = key;
     return supabaseClient;
   } catch (e) {
     console.error('[DB] Failed to initialize Supabase client:', e.message);
@@ -90,6 +93,7 @@ export function hashToken(token) {
 /**
  * Fetch authoritative state for a streamer key.
  * Always queries Supabase PostgreSQL as the true persistent source of truth.
+ * Fails closed on database errors (never returns zero-state as success during outages).
  */
 export async function getState(channel = '') {
   if (!channel) {
@@ -105,7 +109,15 @@ export async function getState(channel = '') {
         .eq('streamer_key', channel)
         .maybeSingle();
 
-      if (!error && data) {
+      if (error) {
+        console.warn(`[DB] Database error fetching state for ${channel}:`, error.message);
+        const dbErr = new Error(`Database service unavailable: ${error.message}`);
+        dbErr.code = 'SERVICE_UNAVAILABLE';
+        dbErr.status = 503;
+        throw dbErr;
+      }
+
+      if (data) {
         const state = {
           deaths: Math.max(0, data.deaths ?? 0),
           sessionDeaths: Math.max(0, data.session_deaths ?? 0),
@@ -123,20 +135,30 @@ export async function getState(channel = '') {
         return state;
       }
 
-      if (error) {
-        console.warn(`[DB] Error fetching state for ${channel}:`, error.message);
-      }
+      // Record does not exist: return initial zero state flagged as not found
+      return { ...DEFAULT_STATE, streamerKey: channel, lastUpdated: Date.now(), notFound: true };
     } catch (e) {
-      console.warn(`[DB] Exception fetching state for ${channel}:`, e.message);
+      if (e.status === 503) throw e;
+      const dbErr = new Error(`Database service unavailable: ${e.message}`);
+      dbErr.code = 'SERVICE_UNAVAILABLE';
+      dbErr.status = 503;
+      throw dbErr;
     }
   }
 
-  // Fallback to cache for read-only resilience
+  // Fallback to cache for read-only resilience in unit tests
   if (channelMap.has(channel)) {
     return { ...channelMap.get(channel) };
   }
 
-  return { ...DEFAULT_STATE, lastUpdated: Date.now() };
+  if (process.env.NODE_ENV === 'test' || !getSupabaseCredentials()) {
+    return { ...DEFAULT_STATE, streamerKey: channel, lastUpdated: Date.now() };
+  }
+
+  const err = new Error('Database service unavailable.');
+  err.code = 'SERVICE_UNAVAILABLE';
+  err.status = 503;
+  throw err;
 }
 
 /**
@@ -221,7 +243,7 @@ export async function verifyStreamerAuth(jwtToken) {
 }
 
 /**
- * Validate Remote Moderator Token via SHA-256 hash lookup in Supabase.
+ * Validate Remote Moderator or Companion Token via SHA-256 hash lookup in Supabase.
  * Enforces expiration, revocation, and returns fine-grained permissions.
  */
 export async function validateModeratorToken(rawToken) {
@@ -247,6 +269,24 @@ export async function validateModeratorToken(rawToken) {
             can_set_bosses: true,
             can_reset_session: true,
             can_reset_all: false,
+          },
+          expiresAt: null,
+        };
+      }
+      if (clean.startsWith('scomp_')) {
+        return {
+          valid: true,
+          tokenId: 'test-comp-id',
+          streamerKey: 'streamer-comp-test-key',
+          streamerName: 'Test Streamer',
+          label: 'Desktop Companion',
+          permissions: {
+            can_increment_deaths: true,
+            can_increment_bosses: true,
+            can_set_deaths: true,
+            can_set_bosses: true,
+            can_reset_session: true,
+            can_reset_all: true,
           },
           expiresAt: null,
         };
@@ -324,6 +364,59 @@ export async function validateModeratorToken(rawToken) {
 }
 
 /**
+ * Issue a dedicated desktop companion token for an authenticated streamer.
+ * Hashes token with SHA-256 and persists to streamer_remote_tokens.
+ */
+export async function createCompanionToken(streamerKey, userId) {
+  if (!streamerKey || !userId) {
+    const err = new Error('streamerKey and userId required to issue companion token');
+    err.status = 400;
+    throw err;
+  }
+
+  const rawToken = `scomp_${crypto.randomBytes(24).toString('hex')}`;
+  const tokenHash = hashToken(rawToken);
+
+  const sb = getSupabase();
+  if (sb) {
+    const { error } = await sb.from('streamer_remote_tokens').insert({
+      user_id: userId,
+      streamer_key: streamerKey,
+      streamer_name: 'Streamer Companion',
+      label: 'Desktop Companion',
+      token_hash: tokenHash,
+      permissions: {
+        can_increment_deaths: true,
+        can_increment_bosses: true,
+        can_set_deaths: true,
+        can_set_bosses: true,
+        can_reset_session: true,
+        can_reset_all: false,
+      },
+      expires_at: null,
+      is_revoked: false,
+    });
+
+    if (error) {
+      const err = new Error(`Failed to persist companion token: ${error.message}`);
+      err.status = 500;
+      throw err;
+    }
+  }
+
+  const defaultPerms = {
+    can_increment_deaths: true,
+    can_increment_bosses: true,
+    can_set_deaths: true,
+    can_set_bosses: true,
+    can_reset_session: true,
+    can_reset_all: true,
+  };
+
+  return { token: rawToken, companionToken: rawToken, streamerKey, permissions: defaultPerms };
+}
+
+/**
  * Backward compatibility helper for token -> streamerKey resolution.
  */
 export async function getStreamerKeyFromToken(rawToken) {
@@ -333,7 +426,7 @@ export async function getStreamerKeyFromToken(rawToken) {
 
 /**
  * Apply atomic counter mutation to authoritative state.
- * Strictly uses PostgreSQL stored procedure mutate_counter with row-level locks.
+ * Strictly uses PostgreSQL stored procedure mutate_counter_backend with row-level locks.
  * NEVER falls back to unprotected direct UPDATE or local memory in production.
  */
 export async function applyAction(rawAction, value, extra = {}, channel = '', token = null, operationId = null) {
@@ -384,13 +477,14 @@ export async function applyAction(rawAction, value, extra = {}, channel = '', to
     throw err;
   }
 
-  // 1. Authoritative PostgreSQL RPC mutate_counter execution
-  const { data: rpcResult, error: rpcError } = await sb.rpc('mutate_counter', {
+  // Authoritative PostgreSQL RPC mutate_counter_backend execution via service_role client
+  const { data: rpcResult, error: rpcError } = await sb.rpc('mutate_counter_backend', {
     p_streamer_key: channel,
     p_action: normAction,
     p_value: intVal,
     p_operation_id: opId,
-    p_token: token || null,
+    p_caller_type: token ? 'moderator' : 'streamer',
+    p_caller_id: token ? hashToken(token) : channel,
   });
 
   if (rpcError) {
@@ -526,10 +620,17 @@ export async function resetState(target = 'session', channel = '', token = null,
 }
 
 /**
- * Update full state/customization in database.
- * Strictly for authenticated streamers (not permitted for remote moderators).
+ * Update configuration/settings in database via atomic update_streamer_config RPC.
+ * Strictly for authenticated streamers. NEVER touches counter columns.
  */
-export async function updateState(updates = {}, channel = '') {
+export async function updateState(updatesOrChannel = {}, channelOrUpdates = '') {
+  let updates = updatesOrChannel;
+  let channel = channelOrUpdates;
+  if (typeof updatesOrChannel === 'string' && typeof channelOrUpdates === 'object') {
+    channel = updatesOrChannel;
+    updates = channelOrUpdates || {};
+  }
+
   if (!channel) {
     const err = new Error('Channel key required');
     err.code = 'BAD_REQUEST';
@@ -551,27 +652,26 @@ export async function updateState(updates = {}, channel = '') {
   };
 
   if (sb) {
-    const dbPayload = {
-      settings: next.settings,
-      shortcuts: next.shortcuts,
-      bosses: next.bosses,
-      current_boss: next.currentBoss,
-      revision: next.revision,
-      last_updated: next.lastUpdated,
-      updated_at: new Date().toISOString(),
-    };
+    const { data: rpcResult, error: rpcError } = await sb.rpc('update_streamer_config', {
+      p_streamer_key: channel,
+      p_settings: updates.settings || null,
+      p_shortcuts: updates.shortcuts || null,
+      p_bosses: updates.bosses !== undefined ? updates.bosses : null,
+      p_current_boss: updates.currentBoss !== undefined ? updates.currentBoss : null,
+      p_display_name: updates.displayName || null,
+    });
 
-    const { error } = await sb
-      .from('streamer_states')
-      .update(dbPayload)
-      .eq('streamer_key', channel);
-
-    if (error) {
-      console.error('[DB] Failed to persist state update:', error.message);
-      const err = new Error(`Database state update failed: ${error.message}`);
+    if (rpcError) {
+      console.error('[DB] Failed to persist configuration update via RPC:', rpcError.message);
+      const err = new Error(`Database configuration update failed: ${rpcError.message}`);
       err.code = 'DB_UPDATE_FAILED';
       err.status = 500;
       throw err;
+    }
+
+    if (rpcResult) {
+      next.revision = rpcResult.revision;
+      next.lastUpdated = rpcResult.lastUpdated;
     }
   }
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
-import { validateRemoteToken, supabase } from '../lib/supabase';
+import { validateRemoteToken, supabase, generateCryptoRandomString } from '../lib/supabase';
 import { broadcastUpdate } from '../lib/sync';
 import { Skull, Trophy, RotateCcw, Edit3, Clock, AlertTriangle, Zap } from 'lucide-react';
 import Embers from '../components/Embers';
@@ -8,7 +8,25 @@ import '../styles/remote.css';
 
 export default function RemoteControl() {
   const [searchParams] = useSearchParams();
-  const token = searchParams.get('token');
+
+  // Extract token from URL hash (#token=...) or query parameter (?token=...)
+  const [token] = useState(() => {
+    if (typeof window === 'undefined') return null;
+    const hash = window.location.hash || '';
+    if (hash.startsWith('#token=')) return hash.slice(7).trim();
+    if (hash.startsWith('#rmt_')) return hash.slice(1).trim();
+    const hashMatch = hash.match(/token=([a-zA-Z0-9_-]+)/);
+    if (hashMatch) return hashMatch[1].trim();
+    const qToken = searchParams.get('token');
+    return qToken ? qToken.trim() : null;
+  });
+
+  // Scrub raw token from browser address bar immediately to prevent Referer and history leakage
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (window.location.hash || window.location.search.includes('token='))) {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  }, []);
 
   const [loading, setLoading] = useState(Boolean(token));
   const [tokenInfo, setTokenInfo] = useState(null);
@@ -25,7 +43,11 @@ export default function RemoteControl() {
   const [customPrompt, setCustomPrompt] = useState(null); // 'death' | 'boss'
   const [customVal, setCustomVal] = useState('');
 
-  // 1. Validate token
+  const lastAppliedRevisionRef = useRef(0);
+  const isFetchingRef = useRef(false);
+  const lastActionTimeRef = useRef(0);
+
+  // 1. Validate token via dedicated POST transport (X-Moderator-Token header)
   useEffect(() => {
     if (!token) return;
 
@@ -40,46 +62,56 @@ export default function RemoteControl() {
   }, [token]);
 
   const streamerKey = tokenInfo?.streamerKey;
-  const lastActionTimeRef = useRef(0);
 
-  // 2. Fetch & Poll streamer state directly from Supabase + API fallback
+  // 2. Fetch & Poll streamer state with strict monotonic revision checking
   const fetchState = useCallback(async () => {
-    if (!streamerKey) return;
-    // Don't let polling overwrite freshly tapped actions
+    if (!streamerKey || isFetchingRef.current) return;
+    // Don't let background polling overwrite freshly tapped actions
     if (Date.now() - lastActionTimeRef.current < 2500) return;
 
-    // 1. Direct Supabase check
-    if (supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('streamer_states')
-          .select('deaths, session_deaths, all_time_deaths, boss_kills')
-          .eq('streamer_key', streamerKey)
-          .maybeSingle();
-
-        if (!error && data) {
-          if (data.deaths !== undefined) setDeaths(data.deaths);
-          if (data.session_deaths !== undefined) setSessionDeaths(data.session_deaths);
-          if (data.all_time_deaths !== undefined) setAllTimeDeaths(data.all_time_deaths);
-          if (data.boss_kills !== undefined) setBossKills(data.boss_kills);
-          return;
-        }
-      } catch {}
-    }
-
-    // 2. Fallback to API
+    isFetchingRef.current = true;
     try {
+      // 1. Direct Supabase check
+      if (supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('streamer_states')
+            .select('deaths, session_deaths, all_time_deaths, boss_kills, revision')
+            .eq('streamer_key', streamerKey)
+            .maybeSingle();
+
+          if (!error && data) {
+            const rev = data.revision || 1;
+            if (rev >= lastAppliedRevisionRef.current) {
+              lastAppliedRevisionRef.current = rev;
+              if (data.deaths !== undefined) setDeaths(data.deaths);
+              if (data.session_deaths !== undefined) setSessionDeaths(data.session_deaths);
+              if (data.all_time_deaths !== undefined) setAllTimeDeaths(data.all_time_deaths);
+              if (data.boss_kills !== undefined) setBossKills(data.boss_kills);
+            }
+            return;
+          }
+        } catch {}
+      }
+
+      // 2. Fallback to API
       const res = await fetch(`/api/state?key=${encodeURIComponent(streamerKey)}&_t=${Date.now()}`, {
         cache: 'no-store',
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.deaths !== undefined) setDeaths(data.deaths);
-        if (data.sessionDeaths !== undefined) setSessionDeaths(data.sessionDeaths);
-        if (data.allTimeDeaths !== undefined) setAllTimeDeaths(data.allTimeDeaths);
-        if (data.bossKills !== undefined) setBossKills(data.bossKills);
+        const rev = data.revision || 1;
+        if (rev >= lastAppliedRevisionRef.current) {
+          lastAppliedRevisionRef.current = rev;
+          if (data.deaths !== undefined) setDeaths(data.deaths);
+          if (data.sessionDeaths !== undefined) setSessionDeaths(data.sessionDeaths);
+          if (data.allTimeDeaths !== undefined) setAllTimeDeaths(data.allTimeDeaths);
+          if (data.bossKills !== undefined) setBossKills(data.bossKills);
+        }
       }
-    } catch {}
+    } finally {
+      isFetchingRef.current = false;
+    }
   }, [streamerKey]);
 
   useEffect(() => {
@@ -108,7 +140,7 @@ export default function RemoteControl() {
     setTimeout(() => setToastMsg(''), 2200);
   };
 
-  // Action Dispatcher: updates local state synchronously and dispatches to backend API with token
+  // Action Dispatcher: updates local state optimistically and dispatches to backend API with token in header
   const sendAction = async (action, extra = {}) => {
     if (!streamerKey || !token) return;
     triggerHaptic([30]);
@@ -125,25 +157,17 @@ export default function RemoteControl() {
       setDeaths(nextDeaths);
       setSessionDeaths(nextSession);
       setAllTimeDeaths(nextAllTime);
-      setAnimDeath(true);
-      setTimeout(() => setAnimDeath(false), 600);
-      showToast('+1 Death sent to streamer!');
     } else if (action === 'undo' || action === 'undoDeath') {
       nextDeaths = Math.max(0, deaths - 1);
       nextSession = Math.max(0, sessionDeaths - 1);
       setDeaths(nextDeaths);
       setSessionDeaths(nextSession);
-      showToast('Death Undone!');
     } else if (action === 'addBossKill') {
       nextBossKills = bossKills + 1;
       setBossKills(nextBossKills);
-      setAnimBoss(true);
-      setTimeout(() => setAnimBoss(false), 900);
-      showToast('+1 Boss Slain sent to streamer!');
     } else if (action === 'undoBossKill') {
       nextBossKills = Math.max(0, bossKills - 1);
       setBossKills(nextBossKills);
-      showToast('Boss Slain Undone!');
     } else if (action === 'setCount' || action === 'setDeath') {
       const val = Math.max(0, parseInt(extra.value !== undefined ? extra.value : extra.deaths, 10) || 0);
       const diff = val - deaths;
@@ -153,18 +177,15 @@ export default function RemoteControl() {
       setDeaths(nextDeaths);
       setSessionDeaths(nextSession);
       setAllTimeDeaths(nextAllTime);
-      showToast(`Deaths set to ${val}`);
     } else if (action === 'setBossCount' || action === 'setBossKill') {
       const val = Math.max(0, parseInt(extra.value !== undefined ? extra.value : extra.bossKills, 10) || 0);
       nextBossKills = val;
       setBossKills(nextBossKills);
-      showToast(`Bosses set to ${val}`);
     } else if (action === 'reset' || action === 'resetSession') {
       nextDeaths = 0;
       nextSession = 0;
       setDeaths(0);
       setSessionDeaths(0);
-      showToast('Session Reset!');
     }
 
     lastActionTimeRef.current = Date.now();
@@ -178,47 +199,66 @@ export default function RemoteControl() {
       triggerAnim: action === 'add' || action === 'addDeath',
     });
 
-    // 2. Dispatch to API with token
+    // 2. Dispatch to API with token in header ONLY; no token or absolute counters in JSON body
     try {
       const isResetAction = action === 'reset' || action === 'resetSession' || action === 'resetAll';
       const endpoint = isResetAction ? `/api/reset` : `/api/action`;
-      const randSuffix = typeof crypto !== 'undefined' && crypto.randomUUID
-        ? crypto.randomUUID().replace(/-/g, '').slice(0, 16)
-        : Math.random().toString(36).slice(2, 12);
-      const operationId = `rmt_${Date.now()}_${randSuffix}`;
+      const operationId = `rmt_${Date.now()}_${generateCryptoRandomString(16)}`;
 
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Moderator-Token': token,
+          'X-Operation-Id': operationId,
         },
         body: JSON.stringify({
           action,
           key: streamerKey,
-          token,
           value: extra.value,
           target: extra.target || (isResetAction ? 'session' : undefined),
-          deaths: nextDeaths,
-          sessionDeaths: nextSession,
-          allTimeDeaths: nextAllTime,
-          bossKills: nextBossKills,
           operationId,
         }),
       });
 
       if (res.ok) {
         const data = await res.json();
-        if (data.deaths !== undefined) setDeaths(data.deaths);
-        if (data.sessionDeaths !== undefined) setSessionDeaths(data.sessionDeaths);
-        if (data.allTimeDeaths !== undefined) setAllTimeDeaths(data.allTimeDeaths);
-        if (data.bossKills !== undefined) setBossKills(data.bossKills);
+        const rev = data.revision || 1;
+        if (rev >= lastAppliedRevisionRef.current) {
+          lastAppliedRevisionRef.current = rev;
+          if (data.deaths !== undefined) setDeaths(data.deaths);
+          if (data.sessionDeaths !== undefined) setSessionDeaths(data.sessionDeaths);
+          if (data.allTimeDeaths !== undefined) setAllTimeDeaths(data.allTimeDeaths);
+          if (data.bossKills !== undefined) setBossKills(data.bossKills);
+        }
+
+        // Show success toast ONLY upon authoritative server confirmation
+        if (action === 'add' || action === 'addDeath') {
+          setAnimDeath(true);
+          setTimeout(() => setAnimDeath(false), 600);
+          showToast('+1 Death confirmed!');
+        } else if (action === 'undo' || action === 'undoDeath') {
+          showToast('Death Undone!');
+        } else if (action === 'addBossKill') {
+          setAnimBoss(true);
+          setTimeout(() => setAnimBoss(false), 900);
+          showToast('+1 Boss Slain confirmed!');
+        } else if (action === 'undoBossKill') {
+          showToast('Boss Slain Undone!');
+        } else if (action === 'setCount' || action === 'setDeath') {
+          showToast(`Deaths set to ${data.deaths ?? extra.value}`);
+        } else if (action === 'setBossCount' || action === 'setBossKill') {
+          showToast(`Bosses set to ${data.bossKills ?? extra.value}`);
+        } else if (action === 'reset' || action === 'resetSession') {
+          showToast('Session Reset confirmed!');
+        }
       } else {
         const errData = await res.json().catch(() => ({}));
         if (res.status === 403) {
           showToast(`Forbidden: ${errData.error?.message || 'Action not permitted'}`);
         } else if (res.status === 401) {
           showToast('Token expired or revoked by streamer!');
+          setErrorReason('revoked');
         } else {
           showToast(errData.error?.message || 'Action failed to reach cloud');
         }

@@ -11,7 +11,7 @@ import Embers from '../components/Embers';
 import ToastContainer, { showToast } from '../components/Toast';
 import { DEFAULT_PRESET_COLORS } from '../lib/defaults';
 import { loadCloudStateByKey, supabase } from '../lib/supabase';
-import { Key, Copy, Check, LogOut, Radio, Users } from 'lucide-react';
+import { Key, Copy, Check, LogOut, Radio, Users, Eye, EyeOff } from 'lucide-react';
 import '../styles/controller.css';
 import '../styles/auth.css';
 
@@ -20,6 +20,7 @@ export default function Controller() {
   const { user, loading: authLoading, streamerKey, signOut, saveCloudState } = useAuth();
   const [transparentPreview, setTransparentPreview] = useState(false);
   const [copiedKey, setCopiedKey] = useState(false);
+  const [showStreamerKey, setShowStreamerKey] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
 
   const {
@@ -228,10 +229,21 @@ export default function Controller() {
               </span>
               <div className="user-streamer-key" title="Your unique Streamer Key">
                 <Key size={12} color="#C8A65D" />
-                <span>{streamerKey}</span>
+                <span style={{ fontFamily: 'monospace', letterSpacing: showStreamerKey ? 'normal' : '1.5px' }}>
+                  {showStreamerKey ? streamerKey : '••••••••••••'}
+                </span>
                 <button
                   type="button"
-                  style={{ background: 'none', border: 'none', color: '#C8A65D', cursor: 'pointer', padding: '0 2px' }}
+                  style={{ background: 'none', border: 'none', color: '#C8A65D', cursor: 'pointer', padding: '0 2px', display: 'inline-flex', alignItems: 'center' }}
+                  onClick={() => setShowStreamerKey((prev) => !prev)}
+                  title={showStreamerKey ? 'Hide Streamer Key' : 'Reveal Streamer Key'}
+                  aria-label={showStreamerKey ? 'Hide Streamer Key' : 'Reveal Streamer Key'}
+                >
+                  {showStreamerKey ? <EyeOff size={12} /> : <Eye size={12} />}
+                </button>
+                <button
+                  type="button"
+                  style={{ background: 'none', border: 'none', color: '#C8A65D', cursor: 'pointer', padding: '0 2px', display: 'inline-flex', alignItems: 'center' }}
                   onClick={() => {
                     navigator.clipboard.writeText(streamerKey);
                     setCopiedKey(true);

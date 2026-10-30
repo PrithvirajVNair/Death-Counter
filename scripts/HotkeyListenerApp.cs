@@ -310,6 +310,7 @@ namespace SoulsGameDeathCounter {
         private Button btnSignOut;
         private Label lblKeyTag;
         private TextBox txtStreamerKey;
+        private Button btnToggleKeyVis;
         private Button btnConnectKey;
         private Button btnPasteKey;
 
@@ -879,17 +880,36 @@ namespace SoulsGameDeathCounter {
 
             txtStreamerKey = new TextBox();
             txtStreamerKey.Location = new Point(102, 80);
-            txtStreamerKey.Size = new Size(210, 24);
+            txtStreamerKey.Size = new Size(174, 24);
             txtStreamerKey.BackColor = Color.FromArgb(14, 15, 12);
             txtStreamerKey.ForeColor = Color.FromArgb(200, 166, 93);
             txtStreamerKey.BorderStyle = BorderStyle.FixedSingle;
             txtStreamerKey.Font = new Font("Consolas", 8.5F);
+            txtStreamerKey.PasswordChar = '*';
             grpAccount.Controls.Add(txtStreamerKey);
+
+            btnToggleKeyVis = new Button();
+            btnToggleKeyVis.Text = "👁";
+            btnToggleKeyVis.Location = new Point(280, 79);
+            btnToggleKeyVis.Size = new Size(32, 26);
+            btnToggleKeyVis.FlatStyle = FlatStyle.Flat;
+            btnToggleKeyVis.FlatAppearance.BorderSize = 1;
+            btnToggleKeyVis.FlatAppearance.BorderColor = Color.FromArgb(74, 63, 38);
+            btnToggleKeyVis.BackColor = Color.FromArgb(28, 29, 23);
+            btnToggleKeyVis.ForeColor = Color.FromArgb(200, 166, 93);
+            btnToggleKeyVis.Cursor = Cursors.Hand;
+            bool isKeyVisible = false;
+            btnToggleKeyVis.Click += delegate {
+                isKeyVisible = !isKeyVisible;
+                txtStreamerKey.PasswordChar = isKeyVisible ? '\0' : '*';
+                btnToggleKeyVis.ForeColor = isKeyVisible ? Color.FromArgb(250, 204, 21) : Color.FromArgb(200, 166, 93);
+            };
+            grpAccount.Controls.Add(btnToggleKeyVis);
 
             btnPasteKey = new Button();
             btnPasteKey.Text = "Paste";
-            btnPasteKey.Location = new Point(318, 79);
-            btnPasteKey.Size = new Size(62, 26);
+            btnPasteKey.Location = new Point(316, 79);
+            btnPasteKey.Size = new Size(64, 26);
             btnPasteKey.FlatStyle = FlatStyle.Flat;
             btnPasteKey.FlatAppearance.BorderSize = 1;
             btnPasteKey.FlatAppearance.BorderColor = Color.FromArgb(74, 63, 38);
@@ -909,8 +929,8 @@ namespace SoulsGameDeathCounter {
 
             btnConnectKey = new Button();
             btnConnectKey.Text = "Connect";
-            btnConnectKey.Location = new Point(386, 79);
-            btnConnectKey.Size = new Size(74, 26);
+            btnConnectKey.Location = new Point(384, 79);
+            btnConnectKey.Size = new Size(76, 26);
             btnConnectKey.FlatStyle = FlatStyle.Flat;
             btnConnectKey.FlatAppearance.BorderSize = 1;
             btnConnectKey.FlatAppearance.BorderColor = Color.FromArgb(74, 63, 38);
@@ -1338,20 +1358,26 @@ namespace SoulsGameDeathCounter {
 
             streamerKey = key;
             if (string.IsNullOrEmpty(userDisplayName) || userDisplayName == "guest") {
-                userDisplayName = key;
+                userDisplayName = MaskKey(key);
             }
             isUserSignedIn = true;
             SaveConfig();
             UpdateAccountUI();
-            LogActivity("✦ Linked Streamer Key: " + streamerKey + ". Fetching cloud state...");
+            LogActivity("✦ Linked Streamer Key: " + MaskKey(streamerKey) + ". Fetching cloud state...");
             TestConnectionAsync();
+        }
+
+        private static string MaskKey(string key) {
+            if (string.IsNullOrEmpty(key)) return "";
+            if (key.Length <= 6) return new string('*', key.Length);
+            return key.Substring(0, 3) + "..." + key.Substring(key.Length - 3);
         }
 
         private void UpdateAccountUI() {
             SafeInvoke(delegate {
                 if (lblAccountStatus != null && !lblAccountStatus.IsDisposed) {
                     if (IsAuthenticated) {
-                        string name = !string.IsNullOrEmpty(userDisplayName) ? userDisplayName : streamerKey;
+                        string name = !string.IsNullOrEmpty(userDisplayName) && userDisplayName != streamerKey ? userDisplayName : MaskKey(streamerKey);
                         lblAccountStatus.Text = "● Signed In: " + name + " (Cloud Active • Hotkeys Enabled)";
                         lblAccountStatus.ForeColor = Color.FromArgb(74, 222, 128);
                         if (btnSignOut != null) {
@@ -1445,7 +1471,8 @@ namespace SoulsGameDeathCounter {
             }
 
             if (lblServerPing != null) {
-                lblServerPing.Text = "Syncing with cloud [Account: " + streamerKey + "]...";
+                string disp = !string.IsNullOrEmpty(userDisplayName) && userDisplayName != streamerKey ? userDisplayName : MaskKey(streamerKey);
+                lblServerPing.Text = "Syncing with cloud [Account: " + disp + "]...";
                 lblServerPing.ForeColor = Color.FromArgb(200, 166, 93);
             }
 
@@ -2111,7 +2138,7 @@ namespace SoulsGameDeathCounter {
                             instance.SaveConfig();
                             instance.SafeInvoke(delegate {
                                 instance.UpdateAccountUI();
-                                instance.LogActivity(string.Format("✦ Google Account Linked: {0} ({1}) [Key: {2}]", userDisplayName, userEmail, streamerKey));
+                                instance.LogActivity(string.Format("✦ Google Account Linked: {0} ({1}) [Key: {2}]", userDisplayName, userEmail, MaskKey(streamerKey)));
                                 instance.TestConnectionAsync();
                             });
                         }

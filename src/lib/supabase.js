@@ -423,6 +423,73 @@ export async function revokeRemoteToken(user, tokenId) {
 }
 
 /**
+ * Parse a remote access code or link input.
+ * Accepts raw tokens (rmt_...), full URLs with query parameters (?token=...),
+ * hash fragments (#token=... or #rmt_...), or embedded tokens.
+ */
+export function parseTokenInput(input) {
+  if (!input || typeof input !== 'string') return '';
+  const val = input.trim();
+  if (!val) return '';
+
+  if (val.startsWith('rmt_')) return val;
+
+  const hashMatch = val.match(/#token=([a-zA-Z0-9_-]+)/) || val.match(/#rmt_([a-zA-Z0-9_-]+)/);
+  if (hashMatch) {
+    return hashMatch[0].startsWith('#rmt_') ? hashMatch[0].slice(1) : hashMatch[1];
+  }
+
+  const queryMatch = val.match(/[?&]token=([a-zA-Z0-9_-]+)/);
+  if (queryMatch) return queryMatch[1];
+
+  const rmtMatch = val.match(/rmt_[a-zA-Z0-9_-]+/);
+  if (rmtMatch) return rmtMatch[0];
+
+  return val;
+}
+
+/**
+ * Extract active remote token from browser location (hash, query params)
+ * with sessionStorage and localStorage fallback to survive page reloads and app switches.
+ */
+export function parseTokenFromLocation(locObj = null, storageMap = null) {
+  const win = locObj || (typeof window !== 'undefined' ? window : null);
+  if (!win) return null;
+
+  // 1. Check URL hash (#token=..., #rmt_..., or token=...)
+  const hash = win.location?.hash || '';
+  if (hash.startsWith('#token=')) return hash.slice(7).trim();
+  if (hash.startsWith('#rmt_')) return hash.slice(1).trim();
+  const hashMatch = hash.match(/token=([a-zA-Z0-9_-]+)/);
+  if (hashMatch) return hashMatch[1].trim();
+  const hashDirectMatch = hash.match(/rmt_[a-zA-Z0-9_-]+/);
+  if (hashDirectMatch) return hashDirectMatch[0].trim();
+
+  // 2. Check query parameters (?token=...)
+  try {
+    const search = win.location?.search || '';
+    const params = new URLSearchParams(search);
+    const qToken = params.get('token');
+    if (qToken && qToken.trim()) return qToken.trim();
+  } catch {}
+
+  // 3. Fallback to storage so reloads or browser suspensions preserve the session
+  try {
+    const s = storageMap?.sessionStorage || (typeof sessionStorage !== 'undefined' ? sessionStorage : null);
+    const sToken = s?.getItem('sdc_remote_token');
+    if (sToken && sToken.trim()) return sToken.trim();
+  } catch {}
+
+  try {
+    const l = storageMap?.localStorage || (typeof localStorage !== 'undefined' ? localStorage : null);
+    const lToken = l?.getItem('sdc_remote_token');
+    if (lToken && lToken.trim()) return lToken.trim();
+  } catch {}
+
+  return null;
+}
+
+/**
  * Validate a token (used by friend on /remote?token=...).
  * Calls the secure backend endpoint to validate SHA-256 hash without exposing database records.
  */

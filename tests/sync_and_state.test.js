@@ -75,4 +75,44 @@ describe('State Preservation, Idempotency & Cryptographic Randomness', () => {
     assert.equal(res2.state.deaths, 1, 'Duplicate operation ID must not re-increment');
     assert.equal(res2.deduped, true, 'Result must be flagged as deduped');
   });
+
+  it('parseTokenInput extracts tokens from direct input, URLs, hashes, and queries', async () => {
+    const { parseTokenInput } = await import('../src/lib/supabase.js');
+
+    assert.equal(parseTokenInput('rmt_test1234567890'), 'rmt_test1234567890');
+    assert.equal(parseTokenInput('  rmt_test1234567890  '), 'rmt_test1234567890');
+    assert.equal(parseTokenInput('https://soulgamedc.vercel.app/remote?token=rmt_query123'), 'rmt_query123');
+    assert.equal(parseTokenInput('https://soulgamedc.vercel.app/remote#token=rmt_hash123'), 'rmt_hash123');
+    assert.equal(parseTokenInput('https://soulgamedc.vercel.app/remote#rmt_directhash123'), 'rmt_directhash123');
+    assert.equal(parseTokenInput('Check out my code: rmt_embedded999!'), 'rmt_embedded999');
+    assert.equal(parseTokenInput(''), '');
+    assert.equal(parseTokenInput(null), '');
+  });
+
+  it('parseTokenFromLocation recovers token on reload and prioritizes URL params over storage', async () => {
+    const { parseTokenFromLocation } = await import('../src/lib/supabase.js');
+
+    // 1. Recover from search query
+    const winWithQuery = { location: { search: '?token=rmt_from_search', hash: '' } };
+    assert.equal(parseTokenFromLocation(winWithQuery), 'rmt_from_search');
+
+    // 2. Recover from hash
+    const winWithHash = { location: { search: '', hash: '#token=rmt_from_hash' } };
+    assert.equal(parseTokenFromLocation(winWithHash), 'rmt_from_hash');
+
+    // 3. Recover from sessionStorage when URL is reloaded without query
+    const mockStorage = {
+      sessionStorage: {
+        getItem: (k) => (k === 'sdc_remote_token' ? 'rmt_from_session' : null),
+      },
+      localStorage: {
+        getItem: () => null,
+      },
+    };
+    const winEmpty = { location: { search: '', hash: '' } };
+    assert.equal(parseTokenFromLocation(winEmpty, mockStorage), 'rmt_from_session');
+
+    // 4. URL query takes precedence over cached storage
+    assert.equal(parseTokenFromLocation(winWithQuery, mockStorage), 'rmt_from_search');
+  });
 });

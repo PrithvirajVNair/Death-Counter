@@ -1,33 +1,21 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
-import { validateRemoteToken, supabase, generateCryptoRandomString } from '../lib/supabase';
+import { Link } from 'react-router-dom';
+import {
+  validateRemoteToken,
+  supabase,
+  generateCryptoRandomString,
+  parseTokenFromLocation,
+  parseTokenInput,
+} from '../lib/supabase';
 import { broadcastUpdate } from '../lib/sync';
-import { Skull, Trophy, RotateCcw, Edit3, Clock, AlertTriangle, Zap } from 'lucide-react';
+import { Skull, Trophy, RotateCcw, Edit3, Clock, AlertTriangle, Zap, LogOut } from 'lucide-react';
 import Embers from '../components/Embers';
 import '../styles/remote.css';
+import '../styles/auth.css';
 
 export default function RemoteControl() {
-  const [searchParams] = useSearchParams();
-
-  // Extract token from URL hash (#token=...) or query parameter (?token=...)
-  const [token] = useState(() => {
-    if (typeof window === 'undefined') return null;
-    const hash = window.location.hash || '';
-    if (hash.startsWith('#token=')) return hash.slice(7).trim();
-    if (hash.startsWith('#rmt_')) return hash.slice(1).trim();
-    const hashMatch = hash.match(/token=([a-zA-Z0-9_-]+)/);
-    if (hashMatch) return hashMatch[1].trim();
-    const qToken = searchParams.get('token');
-    return qToken ? qToken.trim() : null;
-  });
-
-  // Scrub raw token from browser address bar immediately to prevent Referer and history leakage
-  useEffect(() => {
-    if (typeof window !== 'undefined' && (window.location.hash || window.location.search.includes('token='))) {
-      window.history.replaceState(null, '', window.location.pathname);
-    }
-  }, []);
-
+  const [token, setToken] = useState(() => parseTokenFromLocation());
+  const [manualCodeInput, setManualCodeInput] = useState('');
   const [loading, setLoading] = useState(Boolean(token));
   const [tokenInfo, setTokenInfo] = useState(null);
   const [errorReason, setErrorReason] = useState(!token ? 'missing' : null);
@@ -49,17 +37,65 @@ export default function RemoteControl() {
 
   // 1. Validate token via dedicated POST transport (X-Moderator-Token header)
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      setLoading(false);
+      setErrorReason('missing');
+      return;
+    }
+
+    setLoading(true);
+    setErrorReason(null);
 
     validateRemoteToken(token).then((result) => {
       setLoading(false);
       if (result.valid) {
         setTokenInfo(result);
+        setErrorReason(null);
+
+        // Store token in session & local storage so page reload or tab reopen always maintains session
+        try {
+          sessionStorage.setItem('sdc_remote_token', token);
+          localStorage.setItem('sdc_remote_token', token);
+        } catch {}
+
+        // Ensure browser address bar contains the token parameter so reloads and bookmarks work
+        if (typeof window !== 'undefined') {
+          const hasInHash = window.location.hash.includes(token);
+          const hasInSearch = window.location.search.includes(encodeURIComponent(token)) || window.location.search.includes(token);
+          if (!hasInHash && !hasInSearch) {
+            const newUrl = `${window.location.pathname}?token=${encodeURIComponent(token)}`;
+            window.history.replaceState(null, '', newUrl);
+          }
+        }
       } else {
         setErrorReason(result.reason || 'invalid');
+        try {
+          sessionStorage.removeItem('sdc_remote_token');
+          localStorage.removeItem('sdc_remote_token');
+        } catch {}
       }
     });
   }, [token]);
+
+  const handleDisconnect = () => {
+    try {
+      sessionStorage.removeItem('sdc_remote_token');
+      localStorage.removeItem('sdc_remote_token');
+    } catch {}
+    setToken(null);
+    setTokenInfo(null);
+    setErrorReason('missing');
+    if (typeof window !== 'undefined') {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  };
+
+  const handleManualCodeSubmit = (e) => {
+    e.preventDefault();
+    const clean = parseTokenInput(manualCodeInput);
+    if (!clean) return;
+    setToken(clean);
+  };
 
   const streamerKey = tokenInfo?.streamerKey;
 
@@ -303,7 +339,10 @@ export default function RemoteControl() {
     let title = 'Invalid Remote Link';
     let desc = 'This remote operator link is invalid or incomplete. Please request a new link from the streamer.';
 
-    if (errorReason === 'expired') {
+    if (errorReason === 'missing') {
+      title = 'No Access Code Found';
+      desc = 'Open the remote link shared by the streamer, or paste your access code below.';
+    } else if (errorReason === 'expired') {
       title = 'Remote Link Expired';
       desc = 'The expiration time set by the streamer for this session has ended.';
     } else if (errorReason === 'revoked') {
@@ -314,13 +353,38 @@ export default function RemoteControl() {
     return (
       <div className="remote-page">
         <Embers count={6} />
-        <div className="remote-card" style={{ textAlign: 'center', padding: '2.5rem 1.5rem' }}>
+        <div className="remote-card" style={{ textAlign: 'center', padding: '2.5rem 1.5rem', maxWidth: '440px' }}>
           <div style={{ color: '#f87171', margin: '0 auto 1rem' }}>
             <AlertTriangle size={48} />
           </div>
           <h2 style={{ color: '#f87171', fontSize: '1.35rem', marginBottom: '0.6rem' }}>{title}</h2>
-          <p style={{ color: '#a09985', fontSize: '0.88rem', lineHeight: '1.5', marginBottom: '1.8rem' }}>{desc}</p>
-          <Link to="/" className="btn btn--primary" style={{ display: 'inline-block', fontSize: '0.85rem' }}>
+          <p style={{ color: '#a09985', fontSize: '0.88rem', lineHeight: '1.5', marginBottom: '1.5rem' }}>{desc}</p>
+
+          <form onSubmit={handleManualCodeSubmit} style={{ marginBottom: '1.5rem', textAlign: 'left' }}>
+            <label style={{ display: 'block', fontSize: '0.78rem', color: '#c8a65d', marginBottom: '0.4rem', fontWeight: 600 }}>
+              Enter Access Code or Paste Link:
+            </label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <input
+                type="text"
+                className="auth-input"
+                placeholder="rmt_... or paste full link"
+                value={manualCodeInput}
+                onChange={(e) => setManualCodeInput(e.target.value)}
+                style={{ padding: '0.55rem 0.75rem', fontSize: '0.82rem', flex: 1 }}
+              />
+              <button
+                type="submit"
+                className="btn btn--primary"
+                disabled={!manualCodeInput.trim()}
+                style={{ padding: '0.55rem 0.9rem', fontSize: '0.82rem', whiteSpace: 'nowrap' }}
+              >
+                Connect
+              </button>
+            </div>
+          </form>
+
+          <Link to="/" className="btn btn--secondary" style={{ display: 'inline-block', fontSize: '0.85rem' }}>
             Go to Death Counter Home
           </Link>
         </div>
@@ -346,12 +410,34 @@ export default function RemoteControl() {
             <span className="remote-pulse-dot" />
             <span>Controlling for: <strong>{tokenInfo?.streamerName || 'Streamer'}</strong></span>
           </div>
-          {tokenInfo?.expiresAt && (
-            <div className="remote-expiry-pill">
-              <Clock size={11} />
-              <span>Session active</span>
-            </div>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {tokenInfo?.expiresAt && (
+              <div className="remote-expiry-pill">
+                <Clock size={11} />
+                <span>Session active</span>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={handleDisconnect}
+              title="Disconnect & Switch Access Code"
+              style={{
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(200, 166, 93, 0.25)',
+                color: '#a09985',
+                borderRadius: '12px',
+                padding: '3px 8px',
+                fontSize: '0.72rem',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+              }}
+            >
+              <LogOut size={11} />
+              <span>Disconnect</span>
+            </button>
+          </div>
         </header>
 
         {/* Live Scoreboard */}

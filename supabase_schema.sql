@@ -124,12 +124,40 @@ drop policy if exists "Allow token validation by hash" on public.streamer_remote
 create policy "Streamers manage own tokens"
   on public.streamer_remote_tokens
   for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+  to authenticated
+  using (
+    auth.uid() = user_id
+    and exists (
+      select 1 from public.streamer_states s
+      where s.user_id = auth.uid()
+        and s.streamer_key = streamer_remote_tokens.streamer_key
+    )
+  )
+  with check (
+    auth.uid() = user_id
+    and exists (
+      select 1 from public.streamer_states s
+      where s.user_id = auth.uid()
+        and s.streamer_key = streamer_remote_tokens.streamer_key
+    )
+  );
 
 -- Explicitly revoke all anonymous and public permissions on remote tokens
 revoke all on public.streamer_remote_tokens from public, anon;
-grant select, insert, update, delete on public.streamer_remote_tokens to authenticated, service_role;
+revoke select on public.streamer_remote_tokens from authenticated;
+grant select (
+  id,
+  user_id,
+  streamer_key,
+  streamer_name,
+  label,
+  permissions,
+  expires_at,
+  is_revoked,
+  created_at
+) on public.streamer_remote_tokens to authenticated;
+grant insert, update, delete on public.streamer_remote_tokens to authenticated;
+grant all on public.streamer_remote_tokens to service_role;
 
 -- 3.3 operation_idempotency policies (Internal use only)
 drop policy if exists "Streamers read own idempotency" on public.operation_idempotency;
@@ -733,4 +761,120 @@ $$;
 
 revoke all on function public.regenerate_streamer_key(text) from public, anon;
 grant execute on function public.regenerate_streamer_key(text) to authenticated, service_role;
+
+-- 5.7 Dedicated Authenticated RPC: create_remote_token
+-- Ensures streamer_key and streamer_name are sourced authoritatively from streamer_states
+-- and time limits (expires_at) are computed server-side strictly by the owner streamer.
+create or replace function public.create_remote_token(
+  p_label text,
+  p_duration_hours integer,
+  p_token_hash text,
+  p_permissions jsonb default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_user_id uuid;
+  v_streamer_key text;
+  v_streamer_name text;
+  v_expires_at timestamptz;
+  v_record record;
+  v_default_perms jsonb := '{"can_increment_deaths":true,"can_increment_bosses":true,"can_set_deaths":true,"can_set_bosses":true,"can_reset_session":true,"can_reset_all":false}'::jsonb;
+begin
+  v_user_id := auth.uid();
+  if v_user_id is null then
+    raise exception 'Unauthorized: Authentication required to create a remote access link';
+  end if;
+
+  -- Verify caller owns an active streamer chronicle and retrieve authorized streamer key
+  select streamer_key, coalesce(display_name, 'Streamer')
+  into v_streamer_key, v_streamer_name
+  from public.streamer_states
+  where user_id = v_user_id;
+
+  if v_streamer_key is null then
+    raise exception 'Forbidden: You do not own an active streamer chronicle';
+  end if;
+
+  -- Validate token hash format (must be 64-character lowercase hex string)
+  if p_token_hash is null or length(trim(p_token_hash)) <> 64 or trim(p_token_hash) !~ '^[a-fA-F0-9]{64}$' then
+    raise exception 'Invalid token hash format (must be 64-character hex string)';
+  end if;
+
+  -- Calculate time limit (expiry duration) strictly controlled by the owner streamer
+  if p_duration_hours is not null and p_duration_hours > 0 then
+    v_expires_at := now() + (p_duration_hours || ' hours')::interval;
+  else
+    v_expires_at := null; -- permanent link
+  end if;
+
+  -- Insert token record strictly bound to caller user_id and verified streamer_key
+  insert into public.streamer_remote_tokens (
+    user_id,
+    streamer_key,
+    streamer_name,
+    token_hash,
+    label,
+    permissions,
+    expires_at,
+    is_revoked
+  ) values (
+    v_user_id,
+    v_streamer_key,
+    v_streamer_name,
+    lower(trim(p_token_hash)),
+    coalesce(nullif(trim(p_label), ''), 'Friend Access'),
+    coalesce(p_permissions, v_default_perms),
+    v_expires_at,
+    false
+  )
+  returning id, user_id, streamer_key, streamer_name, label, permissions, expires_at, is_revoked, created_at
+  into v_record;
+
+  return jsonb_build_object(
+    'id', v_record.id,
+    'user_id', v_record.user_id,
+    'streamer_key', v_record.streamer_key,
+    'streamer_name', v_record.streamer_name,
+    'label', v_record.label,
+    'permissions', v_record.permissions,
+    'expires_at', v_record.expires_at,
+    'is_revoked', v_record.is_revoked,
+    'created_at', v_record.created_at
+  );
+end;
+$$;
+
+revoke all on function public.create_remote_token(text, integer, text, jsonb) from anon, public;
+grant execute on function public.create_remote_token(text, integer, text, jsonb) to authenticated, service_role;
+
+-- 5.8 Dedicated Authenticated RPC: revoke_remote_token
+-- Ensures only the owner streamer can revoke their access links.
+create or replace function public.revoke_remote_token(p_token_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_user_id uuid;
+begin
+  v_user_id := auth.uid();
+  if v_user_id is null then
+    raise exception 'Unauthorized: Authentication required';
+  end if;
+
+  update public.streamer_remote_tokens
+  set is_revoked = true
+  where id = p_token_id and user_id = v_user_id;
+
+  return found;
+end;
+$$;
+
+revoke all on function public.revoke_remote_token(uuid) from anon, public;
+grant execute on function public.revoke_remote_token(uuid) to authenticated, service_role;
 

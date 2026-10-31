@@ -326,4 +326,36 @@ describe('API Security, Endpoint Authorization & Public Projection', () => {
     assert.equal(res.body.success, true);
     assert.equal(res.body.action, 'add');
   });
+
+  it('POST /api/reset without credentials is fundamentally rejected with 401 UNAUTHORIZED', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/reset',
+      body: { key: 'test-streamer', target: 'session', operationId: 'op_reset_unauth_fail' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.body.error.code, 'UNAUTHORIZED');
+  });
+
+  it('POST /api/reset with invalid moderator token is rejected with 401 INVALID_TOKEN', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'POST',
+      url: '/api/reset',
+      headers: { 'x-moderator-token': 'fake-invalid-token' },
+      body: { target: 'session', operationId: 'op_reset_mod_fail' },
+    });
+    await handler(req, res);
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.body.error.code, 'INVALID_TOKEN');
+  });
+
+  it('GET /api/tokens or similar enumeration endpoints do NOT exist (fail closed)', async () => {
+    const { req, res } = createMockReqRes({
+      method: 'GET',
+      url: '/api/tokens',
+    });
+    await handler(req, res);
+    assert.notEqual(res.statusCode, 200, 'Database access links or tokens must never be enumerable via public API');
+  });
 });

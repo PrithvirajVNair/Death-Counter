@@ -338,9 +338,8 @@ export async function createRemoteToken(user, { label = 'Friend Access', duratio
   const streamerName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'Streamer';
   const rawToken = generateRemoteToken();
   const tokenHash = await sha256Hex(rawToken);
-  const expiresAt = durationHours && durationHours > 0
-    ? new Date(Date.now() + durationHours * 3600 * 1000).toISOString()
-    : null;
+  const cleanLabel = (label && label.trim()) || 'Friend Access';
+  const hours = Number(durationHours) || 0;
 
   const defaultPerms = {
     can_increment_deaths: true,
@@ -350,14 +349,46 @@ export async function createRemoteToken(user, { label = 'Friend Access', duratio
     can_reset_session: true,
     can_reset_all: false,
   };
+  const activePerms = permissions || defaultPerms;
+
+  // 1. Transactionally create token via dedicated RPC (guarantees streamer ownership and server-computed expiry)
+  try {
+    const { data: rpcData, error: rpcError } = await supabase.rpc('create_remote_token', {
+      p_label: cleanLabel,
+      p_duration_hours: hours,
+      p_token_hash: tokenHash,
+      p_permissions: activePerms,
+    });
+
+    if (!rpcError && rpcData) {
+      return {
+        ...rpcData,
+        rawToken,
+        token: rawToken,
+      };
+    }
+    if (rpcError && rpcError.code !== '42883') {
+      console.error('Supabase create_remote_token RPC error:', rpcError);
+      throw new Error(`Failed to create remote token: ${rpcError.message}`);
+    }
+  } catch (err) {
+    if (!err.message?.includes('42883') && !err.message?.includes('does not exist')) {
+      throw err;
+    }
+  }
+
+  // 2. Direct insert fallback (strictly guarded by Row Level Security)
+  const expiresAt = hours > 0
+    ? new Date(Date.now() + hours * 3600 * 1000).toISOString()
+    : null;
 
   const insertPayload = {
     user_id: user.id,
     streamer_key: streamerKey,
     streamer_name: streamerName,
     token_hash: tokenHash,
-    label: (label && label.trim()) || 'Friend Access',
-    permissions: permissions || defaultPerms,
+    label: cleanLabel,
+    permissions: activePerms,
     expires_at: expiresAt,
     is_revoked: false,
   };
@@ -408,6 +439,17 @@ export async function fetchRemoteTokens(user) {
 export async function revokeRemoteToken(user, tokenId) {
   if (!user || !tokenId) return false;
 
+  // 1. Try dedicated RPC
+  try {
+    const { data: rpcSuccess, error: rpcError } = await supabase.rpc('revoke_remote_token', {
+      p_token_id: tokenId,
+    });
+    if (!rpcError && rpcSuccess) {
+      return true;
+    }
+  } catch {}
+
+  // 2. Fallback to direct update (strictly guarded by RLS)
   const { error } = await supabase
     .from('streamer_remote_tokens')
     .update({ is_revoked: true })
